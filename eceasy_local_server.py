@@ -50,10 +50,68 @@ except ImportError:
 # ======== Local Imports ========
 import ecEasyPrompts
 
-# ======== Knowledge Base Selection ========
-# Set KNOWLEDGE to "faiss" to use the FAISS ECE knowledge base (./faiss_index_university/)
-# Set KNOWLEDGE to "chroma" to use the ChromaDB network knowledge base (./arag/chromaVectorStore/)
-KNOWLEDGE = "faiss"  # <-- Change this to switch knowledge bases
+# ======== Load .env first — all os.environ.get() calls below will pick it up ========
+from dotenv import load_dotenv
+load_dotenv(override=True)
+
+# ======== Configuration ========
+
+# --- Server Config ---
+HOST = os.environ.get("HOST", "0.0.0.0")
+PORT = int(os.environ.get("PORT", 8000))
+
+# --- Knowledge Base Selection ---
+# Set KNOWLEDGE in .env:
+#   "faiss"  → FAISS ECE knowledge base (./faiss_index_university/)
+#   "chroma" → ChromaDB network knowledge base (./arag/chromaVectorStore/)
+KNOWLEDGE = os.environ.get("KNOWLEDGE", "faiss").lower()
+
+# --- UI Version ---
+# Set UI_VERSION in .env:
+#   "newUI" → new React/Vite chat interface (./newUI/)
+#   "oldUI" → original Next.js search interface (./ui/)
+UI_VERSION = os.environ.get("UI_VERSION", "newUI").lower()
+
+# --- LLM Provider ---
+# Set LLM_PROVIDER in .env: "ollama", "openai", or "deepseek"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
+
+# --- Feature Flags ---
+KV_NAME = os.environ.get("KV_NAME", "eceasy-chat-local.kv")
+REFERENCE_COUNT = 8
+SHOULD_DO_RELATED_QUESTIONS = os.environ.get("RELATED_QUESTIONS", "true").lower() == "true"
+
+# --- Provider Specific Config ---
+
+# 1. Ollama Configuration
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
+
+# 2. OpenAI Configuration
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", os.environ.get("LLM_REMOTE_OPENAI_API_KEY", ""))
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", os.environ.get("LLM_REMOTE_OPENAI_MODEL", "gpt-4o"))
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", os.environ.get("LLM_REMOTE_OPENAI_URL", "https://api.openai.com/v1"))
+
+# 3. DeepSeek Configuration
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", os.environ.get("LLM_REMOTE_API_KEY", ""))
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", os.environ.get("LLM_REMOTE_URL", "https://api.deepseek.com"))
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", os.environ.get("LLM_REMOTE_MODEL", "deepseek-chat"))
+
+def get_current_model_name():
+    if LLM_PROVIDER == "openai":
+        return OPENAI_MODEL
+    elif LLM_PROVIDER == "deepseek":
+        return DEEPSEEK_MODEL
+    return OLLAMA_MODEL
+
+LLM_MODEL = get_current_model_name()
+
+logger.info(f"Knowledge base : {KNOWLEDGE.upper()}")
+logger.info(f"UI Version     : {UI_VERSION}")
+logger.info(f"LLM Provider   : {LLM_PROVIDER}, Model: {LLM_MODEL}")
+logger.info(f"Server         : {HOST}:{PORT}")
+
+# ======== Knowledge Base Import ========
 
 if KNOWLEDGE == "faiss":
     try:
@@ -69,55 +127,6 @@ else:  # "chroma"
     except ImportError as e:
         logger.warning(f"Could not import arag.arag: {e}. RAG functionality will be disabled.")
         def get_rag_context(query): return []
-
-# ======== Configuration ========
-from dotenv import load_dotenv
-load_dotenv(override=True)
-
-# --- LLM Provider Selection ---
-# Set LLM_PROVIDER to "ollama", "openai", or "deepseek"
-# You can set this in your .env file or default here.
-LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
-
-# --- Common Config ---
-KV_NAME = "eceasy-chat-local.kv"
-REFERENCE_COUNT = 8
-SHOULD_DO_RELATED_QUESTIONS = True
-
-# --- Provider Specific Config ---
-
-# 1. Ollama Configuration
-# URL where your local Ollama instance is running.
-OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
-# The model name in Ollama (e.g., "qwen2.5:14b").
-OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
-
-# 2. OpenAI Configuration
-# Your OpenAI API Key.
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", os.environ.get("LLM_REMOTE_OPENAI_API_KEY", ""))
-# The model to use.
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", os.environ.get("LLM_REMOTE_OPENAI_MODEL", "gpt-4o"))
-# Custom Base URL for OpenAI-compatible endpoints (e.g. for proxies or local surrogates)
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", os.environ.get("LLM_REMOTE_OPENAI_URL", "https://api.openai.com/v1"))
-
-# 3. DeepSeek Configuration
-# Your DeepSeek API Key.
-DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", os.environ.get("LLM_REMOTE_API_KEY", ""))
-# DeepSeek API Base URL.
-DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", os.environ.get("LLM_REMOTE_URL", "https://api.deepseek.com"))
-# The model to use.
-DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", os.environ.get("LLM_REMOTE_MODEL", "deepseek-chat"))
-
-# Helper to get the current model name based on provider
-def get_current_model_name():
-    if LLM_PROVIDER == "openai":
-        return OPENAI_MODEL
-    elif LLM_PROVIDER == "deepseek":
-        return DEEPSEEK_MODEL
-    return OLLAMA_MODEL  # Default to Ollama
-
-LLM_MODEL = get_current_model_name()
-logger.info(f"Using LLM Provider: {LLM_PROVIDER}, Model: {LLM_MODEL}")
 
 # Stop words for the LLM
 # OpenAI API limits to 4 stop sequences.
@@ -411,14 +420,18 @@ async def query_endpoint(request: QueryRequest):
 
 @app.get("/")
 def home():
+    if UI_VERSION == "newUI":
+        return RedirectResponse("/newUI/index.html")
     return RedirectResponse("/ui/index.html")
 
 # Mount static files
 if os.path.exists("ui"):
     app.mount("/ui", StaticFiles(directory="ui"), name="ui")
+if os.path.exists("newUI"):
+    app.mount("/newUI", StaticFiles(directory="newUI"), name="newUI")
 if os.path.exists("localData"):
     app.mount("/localData", StaticFiles(directory="localData"), name="localData")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host=HOST, port=PORT)
