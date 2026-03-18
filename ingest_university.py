@@ -1,13 +1,14 @@
 """
 Ingestion script for ECEasy FAISS knowledge base.
 Reads all .pdf, .docx, and .txt files from ECEknowledge/ and builds
-(or rebuilds) the FAISS index at faiss_index_all-MiniLM-L6-v2/.
+(or rebuilds) the FAISS index at faiss_index_MODELNAME.
 
 Dependencies (install before running):
     pip install pypdf docx2txt faiss-cpu langchain-community langchain-huggingface langchain-text-splitters
 """
 
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -26,6 +27,69 @@ DATA_PATH = Path("ECEknowledge")       # Source knowledge folder
 
 # Files / patterns to skip (e.g. macOS metadata files)
 SKIP_PATTERNS = {".DS_Store"}
+
+# Metadata enrichment controls
+PREPEND_METADATA_TO_CHUNK_TEXT = True
+
+COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)\b")
+
+
+def _normalize_course_code(raw: str) -> str:
+    compact = re.sub(r"\s+", "", raw).replace("-", "").replace("_", "").upper()
+    m = COURSE_CODE_RE.search(compact)
+    if not m:
+        return ""
+    return f"{m.group(1).upper()}{m.group(2).upper()}"
+
+
+def _extract_course_code(text: str) -> str:
+    m = COURSE_CODE_RE.search(text)
+    if not m:
+        return ""
+    return f"{m.group(1).upper()}{m.group(2).upper()}"
+
+
+def _detect_doc_type(rel_path: Path) -> str:
+    rel = str(rel_path).replace("\\", "/").lower()
+    if "/course syllabus/" in rel:
+        return "course_syllabus"
+    if "/program requirement/" in rel:
+        return "program_requirement"
+    if "faq" in rel:
+        return "faq"
+    if "common core" in rel:
+        return "common_core"
+    if "requirements" in rel or "requirement" in rel:
+        return "requirement"
+    return "general"
+
+
+def _extract_structured_metadata(file_path: Path, data_path: Path) -> dict:
+    rel_path = file_path.relative_to(data_path)
+    rel_posix = str(rel_path).replace("\\", "/")
+
+    course_code = _extract_course_code(file_path.stem)
+    if not course_code:
+        course_code = _extract_course_code(rel_posix)
+
+    dept = ""
+    if course_code:
+        dept = course_code[:4]
+    else:
+        for part in rel_path.parts:
+            up = part.upper()
+            if re.fullmatch(r"[A-Z]{4}", up):
+                dept = up
+                break
+
+    return {
+        "source_relpath": rel_posix,
+        "source_name": file_path.name,
+        "source_stem": file_path.stem,
+        "doc_type": _detect_doc_type(rel_path),
+        "department": dept,
+        "course_code": course_code,
+    }
 
 
 def _index_name_from_hub(hub_name: str) -> str:
@@ -90,9 +154,11 @@ def load_all_documents(data_path: Path):
         try:
             loader = PyPDFLoader(str(pdf_path))
             docs = loader.load()
+            structured_meta = _extract_structured_metadata(pdf_path, data_path)
             # Ensure 'source' metadata is the relative path string for consistency
             for doc in docs:
                 doc.metadata["source"] = str(pdf_path)
+                doc.metadata.update(structured_meta)
             all_docs.extend(docs)
             print(f"    [PDF]  {pdf_path.relative_to(data_path)}  ({len(docs)} pages)")
         except Exception as e:
@@ -108,8 +174,10 @@ def load_all_documents(data_path: Path):
         try:
             loader = Docx2txtLoader(str(docx_path))
             docs = loader.load()
+            structured_meta = _extract_structured_metadata(docx_path, data_path)
             for doc in docs:
                 doc.metadata["source"] = str(docx_path)
+                doc.metadata.update(structured_meta)
             all_docs.extend(docs)
             print(f"    [DOCX] {docx_path.relative_to(data_path)}  ({len(docs)} doc(s))")
         except Exception as e:
@@ -129,8 +197,10 @@ def load_all_documents(data_path: Path):
             except Exception:
                 loader = TextLoader(str(txt_path), encoding="latin-1")
                 docs = loader.load()
+            structured_meta = _extract_structured_metadata(txt_path, data_path)
             for doc in docs:
                 doc.metadata["source"] = str(txt_path)
+                doc.metadata.update(structured_meta)
             all_docs.extend(docs)
             print(f"    [TXT]  {txt_path.relative_to(data_path)}  ({len(docs)} doc(s))")
         except Exception as e:
@@ -167,6 +237,35 @@ def main():
         length_function=len,
     )
     chunks = text_splitter.split_documents(docs)
+
+    # Enrich every chunk with stable IDs and searchable metadata text.
+    for idx, chunk in enumerate(chunks):
+        chunk.metadata["chunk_id"] = idx
+        chunk.metadata["chunk_total"] = len(chunks)
+
+        if not chunk.metadata.get("course_code"):
+            inferred = _extract_course_code(chunk.page_content[:1000])
+            if inferred:
+                chunk.metadata["course_code"] = _normalize_course_code(inferred)
+
+        if PREPEND_METADATA_TO_CHUNK_TEXT:
+            header_parts = []
+            cc = chunk.metadata.get("course_code", "")
+            dep = chunk.metadata.get("department", "")
+            dt = chunk.metadata.get("doc_type", "")
+            src = chunk.metadata.get("source_relpath", "")
+            if cc:
+                header_parts.append(f"COURSE_CODE={cc}")
+            if dep:
+                header_parts.append(f"DEPARTMENT={dep}")
+            if dt:
+                header_parts.append(f"DOC_TYPE={dt}")
+            if src:
+                header_parts.append(f"SOURCE={src}")
+
+            if header_parts:
+                chunk.page_content = f"[META] {' | '.join(header_parts)}\n\n{chunk.page_content}"
+
     print(f"Created {len(chunks)} chunks")
 
     # Resolve embedding model and derived index path

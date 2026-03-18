@@ -21,6 +21,27 @@ logger = logging.getLogger(__name__)
 # Chunks with distance >= this value are considered irrelevant and filtered out.
 FAISS_SCORE_THRESHOLD = 1.5
 
+# Retrieve a larger pool first, then rerank with metadata/code-aware boosts.
+FAISS_CANDIDATE_K = int(os.environ.get("FAISS_CANDIDATE_K", "40"))
+FAISS_FINAL_K = int(os.environ.get("FAISS_FINAL_K", "8"))
+
+COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)\b")
+
+
+def _normalize_course_code(text: str) -> str:
+    compact = re.sub(r"\s+", "", text).replace("-", "").replace("_", "").upper()
+    m = COURSE_CODE_RE.search(compact)
+    if not m:
+        return ""
+    return f"{m.group(1).upper()}{m.group(2).upper()}"
+
+
+def _extract_course_code(text: str) -> str:
+    m = COURSE_CODE_RE.search(text)
+    if not m:
+        return ""
+    return f"{m.group(1).upper()}{m.group(2).upper()}"
+
 
 # ======== Embedding model + index path resolution ========
 
@@ -105,21 +126,56 @@ def get_rag_context(query: str):
     if _vectorstore is None:
         return []
 
+    query_course_code = _extract_course_code(query)
+    query_course_code = _normalize_course_code(query_course_code) if query_course_code else ""
+
     try:
         # similarity_search_with_score returns (Document, score) tuples
-        retrieved = _vectorstore.similarity_search_with_score(query, k=8)
+        retrieved = _vectorstore.similarity_search_with_score(query, k=max(FAISS_CANDIDATE_K, FAISS_FINAL_K))
     except Exception as e:
         logger.error(f"[FAISS RAG] Search failed: {e}")
         return []
 
+    reranked = []
+    for doc, raw_score in retrieved:
+        metadata = doc.metadata or {}
+        file_path = metadata.get("source", metadata.get("file_path", ""))
+        doc_course_code = _normalize_course_code(str(metadata.get("course_code", "")))
+        doc_department = str(metadata.get("department", "")).upper()
+
+        score = float(raw_score)
+        text_window = f"{doc.page_content[:1200]}\n{file_path}"
+
+        if query_course_code:
+            if doc_course_code and doc_course_code == query_course_code:
+                score -= 0.45
+            elif query_course_code in text_window.upper():
+                score -= 0.25
+
+            if doc_course_code and doc_course_code != query_course_code:
+                score += 0.12
+
+            if doc_department and query_course_code.startswith(doc_department):
+                score -= 0.05
+
+        reranked.append((doc, raw_score, score))
+
+    reranked.sort(key=lambda x: x[2])
+
+    threshold = 1.2 if query_course_code else FAISS_SCORE_THRESHOLD
+
     # Debug
     print(f"[FAISS RAG Debug] Query: {query}")
-    for doc, score in retrieved:
-        print(f"[FAISS RAG Debug] score={score:.4f} | {doc.page_content[:60]}...")
+    if query_course_code:
+        print(f"[FAISS RAG Debug] Detected course code: {query_course_code}")
+    for doc, raw_score, rerank_score in reranked[:FAISS_FINAL_K]:
+        meta = doc.metadata or {}
+        cc = meta.get("course_code", "")
+        print(f"[FAISS RAG Debug] raw={raw_score:.4f}, rerank={rerank_score:.4f}, cc={cc} | {doc.page_content[:60]}...")
 
     context = []
-    for doc, score in retrieved:
-        if score >= FAISS_SCORE_THRESHOLD:
+    for doc, _, score in reranked[:FAISS_FINAL_K]:
+        if score >= threshold:
             continue  # Too dissimilar — skip
 
         metadata = doc.metadata
@@ -134,6 +190,13 @@ def get_rag_context(query: str):
         else:
             name = os.path.basename(file_path) if file_path else "Source"
             url_suffix = ""
+
+        course_code = _normalize_course_code(str(metadata.get("course_code", "")))
+        doc_type = metadata.get("doc_type", "")
+        if course_code:
+            name = f"[{course_code}] {name}"
+        if doc_type:
+            name = f"{name} ({doc_type})"
 
         # Normalise path separators and strip leading ../
         clean_url_path = re.sub(r"\.\.", "", re.sub(r"\\+", "/", file_path))
