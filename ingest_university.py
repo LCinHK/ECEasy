@@ -1,219 +1,53 @@
-"""
-Ingestion script for ECEasy FAISS knowledge base.
-Reads all .pdf, .docx, and .txt files from ECEknowledge/ and builds
-(or rebuilds) the FAISS index at faiss_index_MODELNAME.
-
-Dependencies (install before running):
-    pip install pypdf docx2txt faiss-cpu langchain-community langchain-huggingface langchain-text-splitters
-"""
-
-import os
-import re
-import shutil
 from pathlib import Path
-
-from dotenv import load_dotenv
-load_dotenv(override=True)
-
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
+from langchain_community.document_loaders import (
+    DirectoryLoader,
+    TextLoader,
+    Docx2txtLoader,
+    PyPDFLoader
+)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
-# ======== Configuration ========
-DATA_PATH = Path("ECEknowledge")       # Source knowledge folder
-# Note: INDEX_PATH is now derived automatically from EMBEDDING_MODEL_HUB_NAME in .env
-# e.g. "BAAI/bge-small-en-v1.5" → "./faiss_index_bge-small-en-v1.5"
-
-# Files / patterns to skip (e.g. macOS metadata files)
-SKIP_PATTERNS = {".DS_Store"}
-
-# Metadata enrichment controls
-PREPEND_METADATA_TO_CHUNK_TEXT = True
-
-COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)\b")
-
-
-def _normalize_course_code(raw: str) -> str:
-    compact = re.sub(r"\s+", "", raw).replace("-", "").replace("_", "").upper()
-    m = COURSE_CODE_RE.search(compact)
-    if not m:
-        return ""
-    return f"{m.group(1).upper()}{m.group(2).upper()}"
-
-
-def _extract_course_code(text: str) -> str:
-    m = COURSE_CODE_RE.search(text)
-    if not m:
-        return ""
-    return f"{m.group(1).upper()}{m.group(2).upper()}"
-
-
-def _detect_doc_type(rel_path: Path) -> str:
-    rel = str(rel_path).replace("\\", "/").lower()
-    if "/course syllabus/" in rel:
-        return "course_syllabus"
-    if "/program requirement/" in rel:
-        return "program_requirement"
-    if "faq" in rel:
-        return "faq"
-    if "common core" in rel:
-        return "common_core"
-    if "requirements" in rel or "requirement" in rel:
-        return "requirement"
-    return "general"
-
-
-def _extract_structured_metadata(file_path: Path, data_path: Path) -> dict:
-    rel_path = file_path.relative_to(data_path)
-    rel_posix = str(rel_path).replace("\\", "/")
-
-    course_code = _extract_course_code(file_path.stem)
-    if not course_code:
-        course_code = _extract_course_code(rel_posix)
-
-    dept = ""
-    if course_code:
-        dept = course_code[:4]
-    else:
-        for part in rel_path.parts:
-            up = part.upper()
-            if re.fullmatch(r"[A-Z]{4}", up):
-                dept = up
-                break
-
-    return {
-        "source_relpath": rel_posix,
-        "source_name": file_path.name,
-        "source_stem": file_path.stem,
-        "doc_type": _detect_doc_type(rel_path),
-        "department": dept,
-        "course_code": course_code,
-    }
-
-
-def _index_name_from_hub(hub_name: str) -> str:
-    """
-    Derives a filesystem-safe FAISS index folder name from a Hub model name.
-      "BAAI/bge-small-en-v1.5"  →  "faiss_index_bge-small-en-v1.5"
-      "all-MiniLM-L6-v2"        →  "faiss_index_all-MiniLM-L6-v2"
-    """
-    short = hub_name.split("/")[-1]
-    return f"faiss_index_{short}"
-
-
-def _resolve_embedding_model() -> tuple[str, str]:
-    """
-    Returns (model_name_or_path, faiss_index_path).
-
-    Model resolution priority:
-      1. If EMBEDDING_MODEL_LOCAL_PATH in .env points to an existing local directory
-         → use it directly (fully offline; sets TRANSFORMERS_OFFLINE=1).
-      2. Otherwise use EMBEDDING_MODEL_HUB_NAME as a Hub ID for auto-download/cache.
-
-    The FAISS index folder is always derived from EMBEDDING_MODEL_HUB_NAME so that
-    different models store their indexes in separate directories and never overwrite
-    each other. Must stay in sync with faiss_rag.py.
-    """
-    hub_name = os.environ.get("EMBEDDING_MODEL_HUB_NAME", "all-MiniLM-L6-v2").strip()
-    index_path = _index_name_from_hub(hub_name)
-
-    local_path = os.environ.get("EMBEDDING_MODEL_LOCAL_PATH", "").strip()
-    if local_path:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        resolved = os.path.normpath(os.path.join(base_dir, local_path))
-        if os.path.isdir(resolved):
-            os.environ["TRANSFORMERS_OFFLINE"] = "1"
-            os.environ["HF_DATASETS_OFFLINE"] = "1"
-            print(f"[Embedding] Using local model folder: '{resolved}' (offline)")
-            print(f"[Embedding] FAISS index will be saved to: '{index_path}'")
-            return resolved, index_path
-        else:
-            print(f"[Embedding] WARNING: EMBEDDING_MODEL_LOCAL_PATH '{local_path}' "
-                  f"(resolved: '{resolved}') not found — falling back to HuggingFace Hub.")
-
-    print(f"[Embedding] Using HuggingFace Hub model: '{hub_name}' (requires internet on first run)")
-    print(f"[Embedding] FAISS index will be saved to: '{index_path}'")
-    return hub_name, index_path
-
+# Folders
+DATA_PATH = Path("knowledge/university_life")      # Put your .txt / .docx / .pdf files here
+INDEX_PATH = "faiss_index_university"              # Where FAISS saves the index
 
 def load_all_documents(data_path: Path):
-    """
-    Load all .pdf, .docx, and .txt files recursively from data_path.
-    Uses per-file loaders for better error isolation and metadata accuracy.
-    """
+    """Load .txt, .docx, and .pdf files using separate loaders and combine."""
     all_docs = []
-    skipped = []
 
-    # --- PDFs (per-file for accurate page metadata) ---
-    pdf_files = sorted(data_path.rglob("*.pdf"))
-    print(f"  Found {len(pdf_files)} PDF file(s)")
-    for pdf_path in pdf_files:
-        if pdf_path.name in SKIP_PATTERNS:
-            continue
-        try:
-            loader = PyPDFLoader(str(pdf_path))
-            docs = loader.load()
-            structured_meta = _extract_structured_metadata(pdf_path, data_path)
-            # Ensure 'source' metadata is the relative path string for consistency
-            for doc in docs:
-                doc.metadata["source"] = str(pdf_path)
-                doc.metadata.update(structured_meta)
-            all_docs.extend(docs)
-            print(f"    [PDF]  {pdf_path.relative_to(data_path)}  ({len(docs)} pages)")
-        except Exception as e:
-            skipped.append((str(pdf_path), str(e)))
-            print(f"    [PDF]  SKIP {pdf_path.name}: {e}")
+    # Load .txt files
+    txt_loader = DirectoryLoader(
+        data_path,
+        glob="**/*.txt",
+        loader_cls=TextLoader,
+        recursive=True,
+        silent_errors=True
+    )
+    all_docs.extend(txt_loader.load())
 
-    # --- DOCX (per-file) ---
-    docx_files = sorted(data_path.rglob("*.docx"))
-    print(f"  Found {len(docx_files)} DOCX file(s)")
-    for docx_path in docx_files:
-        if docx_path.name in SKIP_PATTERNS:
-            continue
-        try:
-            loader = Docx2txtLoader(str(docx_path))
-            docs = loader.load()
-            structured_meta = _extract_structured_metadata(docx_path, data_path)
-            for doc in docs:
-                doc.metadata["source"] = str(docx_path)
-                doc.metadata.update(structured_meta)
-            all_docs.extend(docs)
-            print(f"    [DOCX] {docx_path.relative_to(data_path)}  ({len(docs)} doc(s))")
-        except Exception as e:
-            skipped.append((str(docx_path), str(e)))
-            print(f"    [DOCX] SKIP {docx_path.name}: {e}")
+    # Load .docx files
+    docx_loader = DirectoryLoader(
+        data_path,
+        glob="**/*.docx",
+        loader_cls=Docx2txtLoader,
+        recursive=True,
+        silent_errors=True
+    )
+    all_docs.extend(docx_loader.load())
 
-    # --- TXT (per-file) ---
-    txt_files = sorted(data_path.rglob("*.txt"))
-    print(f"  Found {len(txt_files)} TXT file(s)")
-    for txt_path in txt_files:
-        if txt_path.name in SKIP_PATTERNS:
-            continue
-        try:
-            try:
-                loader = TextLoader(str(txt_path), encoding="utf-8")
-                docs = loader.load()
-            except Exception:
-                loader = TextLoader(str(txt_path), encoding="latin-1")
-                docs = loader.load()
-            structured_meta = _extract_structured_metadata(txt_path, data_path)
-            for doc in docs:
-                doc.metadata["source"] = str(txt_path)
-                doc.metadata.update(structured_meta)
-            all_docs.extend(docs)
-            print(f"    [TXT]  {txt_path.relative_to(data_path)}  ({len(docs)} doc(s))")
-        except Exception as e:
-            skipped.append((str(txt_path), str(e)))
-            print(f"    [TXT]  SKIP {txt_path.name}: {e}")
-
-    if skipped:
-        print(f"\n  Warning: {len(skipped)} file(s) could not be loaded:")
-        for path, err in skipped:
-            print(f"    - {path}: {err}")
+    # Load .pdf files
+    pdf_loader = DirectoryLoader(
+        data_path,
+        glob="**/*.pdf",
+        loader_cls=PyPDFLoader,
+        recursive=True,
+        silent_errors=True
+    )
+    all_docs.extend(pdf_loader.load())
 
     return all_docs
-
 
 def main():
     if not DATA_PATH.exists() or not any(DATA_PATH.iterdir()):
@@ -221,79 +55,41 @@ def main():
         print("→ Create it and add at least one .txt / .docx / .pdf file")
         return
 
-    print(f"Loading documents from '{DATA_PATH}'...")
+    print("Loading documents...")
     docs = load_all_documents(DATA_PATH)
-    print(f"\nTotal raw pages/docs loaded: {len(docs)}")
+    print(f"Loaded {len(docs)} documents in total")
 
     if len(docs) == 0:
         print("No documents loaded → nothing to index. Add files and retry.")
         return
 
-    # Split into chunks
-    print("\nSplitting into chunks...")
+    # 2. Split into chunks
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=150,
         length_function=len,
+        add_start_index=True                # Helpful for tracing back to source
     )
     chunks = text_splitter.split_documents(docs)
-
-    # Enrich every chunk with stable IDs and searchable metadata text.
-    for idx, chunk in enumerate(chunks):
-        chunk.metadata["chunk_id"] = idx
-        chunk.metadata["chunk_total"] = len(chunks)
-
-        if not chunk.metadata.get("course_code"):
-            inferred = _extract_course_code(chunk.page_content[:1000])
-            if inferred:
-                chunk.metadata["course_code"] = _normalize_course_code(inferred)
-
-        if PREPEND_METADATA_TO_CHUNK_TEXT:
-            header_parts = []
-            cc = chunk.metadata.get("course_code", "")
-            dep = chunk.metadata.get("department", "")
-            dt = chunk.metadata.get("doc_type", "")
-            src = chunk.metadata.get("source_relpath", "")
-            if cc:
-                header_parts.append(f"COURSE_CODE={cc}")
-            if dep:
-                header_parts.append(f"DEPARTMENT={dep}")
-            if dt:
-                header_parts.append(f"DOC_TYPE={dt}")
-            if src:
-                header_parts.append(f"SOURCE={src}")
-
-            if header_parts:
-                chunk.page_content = f"[META] {' | '.join(header_parts)}\n\n{chunk.page_content}"
-
     print(f"Created {len(chunks)} chunks")
 
-    # Resolve embedding model and derived index path
-    model_name, index_path = _resolve_embedding_model()
-
-    # Embed and store in FAISS
-    print("\nLoading embedding model...")
+    # 3. Embed and store in FAISS
     embeddings = HuggingFaceEmbeddings(
-        model_name=model_name,
-        model_kwargs={"device": "cpu"},      # Change to "cuda" if GPU available
-        encode_kwargs={"normalize_embeddings": True},
+        model_name="all-MiniLM-L6-v2",      # Fast & decent quality
+        model_kwargs={"device": "cpu"},     # Change to "mps" if you want Apple Silicon acceleration
     )
 
-    print("Embedding and building FAISS index (this may take a while)...")
+    print("Embedding and saving index...")
     vectorstore = FAISS.from_documents(
         documents=chunks,
-        embedding=embeddings,
+        embedding=embeddings
     )
-
-    # Remove old index for this model before saving to avoid stale data
-    old_index = Path(index_path)
-    if old_index.exists():
-        shutil.rmtree(old_index)
-        print(f"Removed old index at '{index_path}'")
-
-    vectorstore.save_local(index_path)
-    print(f"\nDone! FAISS index saved to: '{index_path}' ({len(chunks)} vectors)")
-
+    vectorstore.save_local(INDEX_PATH)
+    print(f"Saved FAISS index to: {INDEX_PATH}")
 
 if __name__ == "__main__":
     main()
+
+print(f"Total original documents loaded: {len(docs)}")
+for doc in docs[:10]:  # show first 10 as example
+    print(f"- {doc.metadata.get('source', 'unknown')}")
