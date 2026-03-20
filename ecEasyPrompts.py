@@ -3,7 +3,7 @@ ecEasyPrompts.py - Improved prompts for HKUST ECE/ELEC students
 """
 
 # If the user did not provide a query, we will use this default query.
-_default_query = "What is the ultimate answer to life, the universe, and everything?"
+_default_query = "What is the ultimate answer to life, the universe, and everything?" 
 
 # Main RAG answering prompt - now acts as a supportive program advisor
 _rag_query_text = """

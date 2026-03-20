@@ -1,7 +1,7 @@
 <<<<<<< HEAD
 # How to Run ECEasy Locally (Without Lepton AI)
 
-This setup allows you to run the ECEasy backend locally using **Ollama**, **OpenAI**, or **DeepSeek** as the LLM provider.
+This setup allows you to run the ECEasy backend locally using **Ollama**, **OpenAI**, or **DeepSeek** as the LLM provider. 
 =======
 
 
