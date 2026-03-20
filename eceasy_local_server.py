@@ -5,6 +5,8 @@ It replaces the Lepton AI dependency with local Ollama, OpenAI, or DeepSeek as t
 
 import json
 import os
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 
 # Disable ChromaDB Telemetry to avoid errors
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
@@ -49,84 +51,60 @@ except ImportError:
 
 # ======== Local Imports ========
 import ecEasyPrompts
+try:
+    from arag.arag import get_rag_context
+except ImportError:
+    logger.warning("Could not import arag.arag. RAG functionality will be disabled.")
+    def get_rag_context(query): return []
 
-# ======== Load .env first — all os.environ.get() calls below will pick it up ========
+# ======== Configuration ========
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-# ======== Configuration ========
-
-# --- Server Config ---
-HOST = os.environ.get("HOST", "0.0.0.0")
-PORT = int(os.environ.get("PORT", 8000))
-
-# --- Knowledge Base Selection ---
-# Set KNOWLEDGE in .env:
-#   "faiss"  → FAISS ECE knowledge base (./faiss_index_all-MiniLM-L6-v2/)
-#   "chroma" → ChromaDB network knowledge base (./arag/chromaVectorStore/)
-KNOWLEDGE = os.environ.get("KNOWLEDGE", "faiss").lower()
-
-# --- UI Version ---
-# Set UI_VERSION in .env:
-#   "newUI" → new React/Vite chat interface (./newUI/)
-#   "oldUI" → original Next.js search interface (./ui/)
-UI_VERSION = os.environ.get("UI_VERSION", "newUI").lower()
-
-# --- LLM Provider ---
-# Set LLM_PROVIDER in .env: "ollama", "openai", or "deepseek"
+# --- LLM Provider Selection ---
+# Set LLM_PROVIDER to "ollama", "openai", or "deepseek"
+# You can set this in your .env file or default here.
 LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
 
-# --- Feature Flags ---
-KV_NAME = os.environ.get("KV_NAME", "eceasy-chat-local.kv")
-REFERENCE_COUNT = 8
-SHOULD_DO_RELATED_QUESTIONS = os.environ.get("RELATED_QUESTIONS", "true").lower() == "true"
+# --- Common Config ---
+KV_NAME = "eceasy-chat-local.kv"
+REFERENCE_COUNT = 8 # change from 8 to 0
+SHOULD_DO_RELATED_QUESTIONS = False # change from true to false
 
 # --- Provider Specific Config ---
 
 # 1. Ollama Configuration
+# URL where your local Ollama instance is running.
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+# The model name in Ollama (e.g., "qwen2.5:14b").
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:4b")
 
 # 2. OpenAI Configuration
+# Your OpenAI API Key.
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", os.environ.get("LLM_REMOTE_OPENAI_API_KEY", ""))
+# The model to use.
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", os.environ.get("LLM_REMOTE_OPENAI_MODEL", "gpt-4o"))
+# Custom Base URL for OpenAI-compatible endpoints (e.g. for proxies or local surrogates)
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", os.environ.get("LLM_REMOTE_OPENAI_URL", "https://api.openai.com/v1"))
 
 # 3. DeepSeek Configuration
+# Your DeepSeek API Key.
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", os.environ.get("LLM_REMOTE_API_KEY", ""))
+# DeepSeek API Base URL.
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", os.environ.get("LLM_REMOTE_URL", "https://api.deepseek.com"))
+# The model to use.
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", os.environ.get("LLM_REMOTE_MODEL", "deepseek-chat"))
 
+# Helper to get the current model name based on provider
 def get_current_model_name():
     if LLM_PROVIDER == "openai":
         return OPENAI_MODEL
     elif LLM_PROVIDER == "deepseek":
         return DEEPSEEK_MODEL
-    return OLLAMA_MODEL
+    return OLLAMA_MODEL  # Default to Ollama
 
 LLM_MODEL = get_current_model_name()
-
-logger.info(f"Knowledge base : {KNOWLEDGE.upper()}")
-logger.info(f"UI Version     : {UI_VERSION}")
-logger.info(f"LLM Provider   : {LLM_PROVIDER}, Model: {LLM_MODEL}")
-logger.info(f"Server         : {HOST}:{PORT}")
-
-# ======== Knowledge Base Import ========
-
-if KNOWLEDGE == "faiss":
-    try:
-        from faiss_rag import get_rag_context
-        logger.info(f"Knowledge base: FAISS (ECE knowledge — faiss)")
-    except ImportError as e:
-        logger.warning(f"Could not import faiss_rag: {e}. RAG functionality will be disabled.")
-        def get_rag_context(query): return []
-else:  # "chroma"
-    try:
-        from arag.arag import get_rag_context
-        logger.info("Knowledge base: ChromaDB (Network knowledge — arag/chromaVectorStore/)")
-    except ImportError as e:
-        logger.warning(f"Could not import arag.arag: {e}. RAG functionality will be disabled.")
-        def get_rag_context(query): return []
+logger.info(f"Using LLM Provider: {LLM_PROVIDER}, Model: {LLM_MODEL}")
 
 # Stop words for the LLM
 # OpenAI API limits to 4 stop sequences.
@@ -136,6 +114,24 @@ STOP_WORDS = [
     "\nReferences:\n",
     "\nSources:\n",
 ]
+
+# ======== FAISS University Knowledge Base ========
+FAISS_INDEX_PATH = "faiss_index_university"
+
+# Load embeddings once
+embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+# Load FAISS vector store once at startup
+vectorstore = None
+try:
+    vectorstore = FAISS.load_local(
+        FAISS_INDEX_PATH,
+        embeddings=embeddings,
+        allow_dangerous_deserialization=True  # Required for local pickled index
+    )
+    logger.info(f"FAISS university index loaded successfully from {FAISS_INDEX_PATH}")
+except Exception as e:
+    logger.warning(f"Could not load FAISS index: {e}. University RAG will be disabled.")
 
 # ======== Models ========
 
@@ -193,8 +189,6 @@ def search_with_duckduckgo(query: str) -> List[dict]:
         for attempt in range(3):
             try:
                 with DDGS() as ddgs:
-                    # max_results corresponds to 'max_results' in ddgs.text()
-                    # use a slightly larger number to ensure we get enough valid ones
                     ddgs_gen = ddgs.text(query, max_results=REFERENCE_COUNT)
                     if ddgs_gen:
                         results = list(ddgs_gen)
@@ -202,7 +196,6 @@ def search_with_duckduckgo(query: str) -> List[dict]:
                             break # Success
             except Exception as e:
                 logger.warning(f"DuckDuckGo attempt {attempt+1} failed: {e}")
-                # Optional: time.sleep(1)
 
         logger.info(f"DuckDuckGo found {len(results)} results")
 
@@ -211,8 +204,8 @@ def search_with_duckduckgo(query: str) -> List[dict]:
                 {
                     "id": str(uuid.uuid4()),
                     "name": r.get("title", "Source"),
-                    "url": r.get("href", "#"), # ddgs uses 'href' usually
-                    "snippet": r.get("body", "") # ddgs uses 'body' usually
+                    "url": r.get("href", "#"),
+                    "snippet": r.get("body", "")
                 }
                 for r in results
             ]
@@ -251,13 +244,11 @@ def get_related_questions(query: str, contexts: List[dict]) -> List[str]:
         # Log raw content for debugging
         logger.info(f"Related questions raw output: {content}")
 
-        # Parse the output. We expect a list of questions, but LLM might be chatty.
-        # We try to extract lines that look like questions or JSON.
+        # Parse the output. We expect a list of questions.
         questions = []
         for line in content.split('\n'):
             line = line.strip()
             if line and (line.endswith('?') or line.startswith('-') or line.startswith('*') or line[0].isdigit()):
-                # Clean up bullets
                 line = re.sub(r"^[*\-\d.]+\s*", "", line)
                 questions.append(line)
 
@@ -276,7 +267,7 @@ def stream_response(
 ) -> Generator[str, None, None]:
     """
     Main logic to:
-    1. Retrieve context (RAG + Web)
+    1. Retrieve context (University RAG + Web fallback)
     2. Stream LLM Answer
     3. Stream Related Questions
     4. Cache results
@@ -285,16 +276,25 @@ def stream_response(
     # 1. Retrieve Contexts
     contexts = []
 
-    # RAG
-    try:
-        rag_contexts = get_rag_context(query)
-        logger.info(f"RAG found {len(rag_contexts)} contexts")
-        contexts.extend(rag_contexts)
-    except Exception as e:
-        logger.error(f"RAG error: {e}")
+    # University-life RAG (priority)
+    if vectorstore is not None:
+        try:
+            relevant_docs = vectorstore.similarity_search(query, k=4)
+            university_contexts = [
+                {
+                    "id": str(uuid.uuid4()),
+                    "name": "University Knowledge Base",
+                    "url": "#",
+                    "snippet": doc.page_content
+                }
+                for doc in relevant_docs
+            ]
+            contexts.extend(university_contexts)
+            logger.info(f"University RAG found {len(university_contexts)} relevant chunks")
+        except Exception as e:
+            logger.error(f"University RAG error: {e}")
 
-    # DuckDuckGo (fill up only if needed, to save time/tokens, or always add?)
-    # Original logic: if len(contexts) < REFERENCE_COUNT
+    # DuckDuckGo web search as fallback (only if not enough from RAG)
     if len(contexts) < REFERENCE_COUNT:
         try:
             web_results = search_with_duckduckgo(query)
@@ -302,20 +302,29 @@ def stream_response(
         except Exception as e:
             logger.error(f"Web search error: {e}")
 
-    # Limit contexts
+    # Limit total contexts
     contexts = contexts[:REFERENCE_COUNT]
 
-    # Send Contexts to client
-    yield json.dumps(contexts)
-    yield "\n\n__LLM_RESPONSE__\n\n"
+    # Send Contexts to client (for citations in UI)
+    
+    #yield json.dumps(contexts)
+    #yield "\n\n__LLM_RESPONSE__\n\n"
 
-    # 2. Prepare LLM Prompt
-    # Format context for prompt
+    # 2. Prepare enhanced LLM Prompt
     context_block = "\n\n".join(
         [f"[[citation:{i+1}]] {c['snippet']}" for i, c in enumerate(contexts)]
     )
 
-    system_prompt = ecEasyPrompts._rag_query_text.format(context=context_block)
+    # Tailored system prompt for HK university life
+    system_prompt = f"""You are a friendly, experienced student advisor for life in Hong Kong universities of Science and Technology (HKUST).
+You know about dorms/halls, course registration, stress & mental health support, clubs & societies, part-time jobs, cost of living, transport (MTR/octopus), food on campus, social life, making friends, etc.
+
+Use the following relevant information from university sources and web results if it helps answer accurately:
+{context_block}
+
+If the context doesn't fully cover the question, use your general knowledge but be honest if something might have changed recently (e.g. fees, rules in 2025–2026).
+
+Answer in a supportive, encouraging, practical tone — like talking to a fellow student."""
 
     llm_response_accumulated = []
 
@@ -350,22 +359,20 @@ def stream_response(
     if SHOULD_DO_RELATED_QUESTIONS and generate_related_questions:
         try:
             questions = get_related_questions(query, contexts)
-            # Frontend expects keywords/questions in an object with "question" key
             formatted_questions = [{"question": q} for q in questions]
             related_questions_json = json.dumps(formatted_questions)
-            yield "\n\n__RELATED_QUESTIONS__\n\n"
-            yield related_questions_json
+            #yield "\n\n__RELATED_QUESTIONS__\n\n"
+            #yield related_questions_json
         except Exception as e:
             logger.error(f"Related questions error: {e}")
 
     # 4. Cache Result
-    # We cache the full interaction for the "UUID" retrieval
     if search_uuid:
         full_response_data = [
             json.dumps(contexts),
-            "\n\n__LLM_RESPONSE__\n\n",
+            #"\n\n__LLM_RESPONSE__\n\n",
             "".join(llm_response_accumulated),
-            "\n\n__RELATED_QUESTIONS__\n\n" + related_questions_json
+            #"\n\n__RELATED_QUESTIONS__\n\n" + related_questions_json
         ]
         try:
             with shelve.open(KV_NAME) as db:
@@ -407,8 +414,6 @@ async def query_endpoint(request: QueryRequest):
             with shelve.open(KV_NAME) as db:
                 if request.search_uuid in db:
                     cached_data = db[request.search_uuid]
-                    # cached_data is a list of strings (parts of the stream)
-                    # We can stream it back
                     return StreamingResponse(iter(cached_data), media_type="text/plain")
         except Exception:
             pass
@@ -420,18 +425,14 @@ async def query_endpoint(request: QueryRequest):
 
 @app.get("/")
 def home():
-    if UI_VERSION == "newui":
-        return RedirectResponse("/newUI/index.html")
     return RedirectResponse("/ui/index.html")
 
 # Mount static files
 if os.path.exists("ui"):
     app.mount("/ui", StaticFiles(directory="ui"), name="ui")
-if os.path.exists("newUI"):
-    app.mount("/newUI", StaticFiles(directory="newUI"), name="newUI")
 if os.path.exists("localData"):
     app.mount("/localData", StaticFiles(directory="localData"), name="localData")
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host=HOST, port=PORT)
+    uvicorn.run(app, host="0.0.0.0", port=8000)

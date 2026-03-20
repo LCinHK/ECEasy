@@ -1,0 +1,46 @@
+Questions: Do undergraduate student of Electronic and Computer Engineering (ECE) Department find the internship themselves?
+Answer: Yes, student need to find internship by themselves. 
+
+Questions: Do student need to make a CV, when and how?
+Answer: Yes, student need to prepare their CV starting form year 2. A CV workshop are there to help student prepare for them, please be informative to the email inbox.
+
+Questions: Can student take internship before year 3?
+Answer: Yes. 
+
+Questions: I cannot speak Chinese, would that be a problem?
+Answer: No, many internship jobs in HK do not require student to be fluent in Chinese.
+
+Questions: Is UxOP(1+2) an internship? Should student of ECE take it?
+Answer: No, UxOP(1+2) is not an internship.
+
+Questions: Should I take UROP, UTOP, UPOP, or UCOP? Choose only one of them?
+Answer: Student can decide what UxOP they want to take or not take any as long as student fulfill the common core requirements.
+
+Questions: Does ELEC 4900 count towards a 4000 level elective course?
+Answer: No. ELEC 4900, ELEC 4901, or ELEC 4910 is a required course. It is different version of Final Year Project, Final Year Thesis, and Co-op. They do not count towards the two of 4000-level elective for graduation requirement.
+
+Questions: Does ELEC 3910 count towards a 3000 level elective course to fulfill graduation requirement?
+Answer: No, it does not.
+
+Questions: Do student need to take ELEC 1910?
+Answer: For student whose program started at 2025, this course is automatically assign to their course schedule. For student admitted to the program before, they do not need to take this course.
+
+Questions: What is Co-op is it also an internship?
+Answer: Co-op is an internship that last for six months. Therefore, student will take study leave in year 4 as student need to work in company for six months. It means that a student cannot take courses other than ELEC 4910 in that semester.
+
+Questions: When should I prepare for FYP/FYT/Co-op?
+Answer: Student will choose FYP/FYT topic in the spring semester of year 3 and officially enroll in FYP/FYT in the summer semester of year 3.
+
+Questions: What is the classroom “TBA” on my weekly schedule?
+Answer: TBA is short for To Be Announce. It means that the classroom is not officially assign yet. You may want to check your email or canvas announcement to view the actual class venue and the actual date and time the class is taking place.
+
+Questions: What are some useful websites to support my study?
+Answer: 
+-	https://ust.space/  : To view and post course review
+-	https://petergao.cc/ustpastpaper/index.php : To get the pastpaper
+-	USThing : An APP to assist student in campus
+-	Path Advisor : An APP to guide student in campus
+-	HKUST iLearn : An APP for student to take in-class quiz
+
+Question: what is elec 1991?
+Answer: It is an old course and a previous course code of ELEC-2991-Industrial Experience (Electronic Engineering) (0 units)
