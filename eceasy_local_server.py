@@ -70,6 +70,7 @@ KNOWLEDGE = os.environ.get("KNOWLEDGE", "faiss").lower()
 # Set UI_VERSION in .env:
 #   "newUI" → new React/Vite chat interface (./newUI/)
 #   "oldUI" → original Next.js search interface (./ui/)
+#   "frontpage" → static demo landing page (./newDesign/FrontPage/)
 UI_VERSION = os.environ.get("UI_VERSION", "newUI").lower()
 
 # --- LLM Provider ---
@@ -422,13 +423,25 @@ async def query_endpoint(request: QueryRequest):
 def home():
     if UI_VERSION == "newui":
         return RedirectResponse("/newUI/index.html")
+    if UI_VERSION == "frontpage":
+        return RedirectResponse("/frontpage/index.html")
     return RedirectResponse("/ui/index.html")
+
+@app.get("/frontpage")
+def frontpage_redirect():
+    return RedirectResponse("/frontpage/index.html")
+
+@app.get("/frontpage/")
+def frontpage_redirect_slash():
+    return RedirectResponse("/frontpage/index.html")
 
 # Mount static files
 if os.path.exists("ui"):
     app.mount("/ui", StaticFiles(directory="ui"), name="ui")
 if os.path.exists("newUI"):
     app.mount("/newUI", StaticFiles(directory="newUI"), name="newUI")
+if os.path.exists(os.path.join("newDesign", "FrontPage")):
+    app.mount("/frontpage", StaticFiles(directory=os.path.join("newDesign", "FrontPage")), name="frontpage")
 if os.path.exists("localData"):
     app.mount("/localData", StaticFiles(directory="localData"), name="localData")
 

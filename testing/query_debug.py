@@ -28,9 +28,7 @@ def main():
         nargs="+",
         default=[
             "ELEC1100",
-            "What are prerequisites for ELEC2400?",
-            "COMP1001 syllabus",
-            "program requirements for ELEC",
+            "What is COMP2011? Why ELEC students need to take it"
         ],
         help="Test queries (space-separated)"
     )
@@ -97,7 +95,7 @@ def main():
     )
 
     # Helper functions (from faiss_rag.py)
-    COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)\b")
+    COURSE_CODE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)(?![A-Za-z0-9])")
 
     def normalize_course_code(text: str) -> str:
         compact = re.sub(r"\s+", "", text).replace("-", "").replace("_", "").upper()
@@ -131,9 +129,24 @@ def main():
         query_vec_array = np.array([query_vec], dtype=np.float32)
         distances, indices = idx.search(query_vec_array, k=args.candidate_k)
 
+        # For course-code queries, also retrieve with code-only text and merge candidates.
+        merged = {}
+        for idx_pos, raw_score in zip(indices[0], distances[0]):
+            merged[int(idx_pos)] = float(raw_score)
+
+        if query_code_norm:
+            code_vec = embeddings.embed_query(query_code_norm)
+            code_vec_array = np.array([code_vec], dtype=np.float32)
+            d2, i2 = idx.search(code_vec_array, k=args.candidate_k)
+            for idx_pos, raw_score in zip(i2[0], d2[0]):
+                idx_pos = int(idx_pos)
+                raw_score = float(raw_score)
+                if idx_pos not in merged or raw_score < merged[idx_pos]:
+                    merged[idx_pos] = raw_score
+
         # Rerank (same logic as faiss_rag.py)
         reranked = []
-        for i, (idx_pos, raw_score) in enumerate(zip(indices[0], distances[0])):
+        for idx_pos, raw_score in merged.items():
             ds_id = index_to_docstore_id.get(int(idx_pos))
             if ds_id is None:
                 continue
@@ -142,6 +155,7 @@ def main():
             md = getattr(doc, "metadata", {}) or {}
             doc_code = normalize_course_code(str(md.get("course_code", "")))
             doc_dept = str(md.get("department", "")).upper()
+            source_relpath = str(md.get("source_relpath", ""))
 
             score = float(raw_score)
             text_window = f"{doc.page_content[:1200]}\n{md.get('source_relpath', '')}"
@@ -152,6 +166,9 @@ def main():
                     score -= 0.45
                 elif query_code_norm in text_window.upper():
                     score -= 0.25
+
+                if query_code_norm in source_relpath.upper():
+                    score -= 0.35
 
                 if doc_code and doc_code != query_code_norm:
                     score += 0.12

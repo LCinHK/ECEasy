@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="ECEasy is an AI chatbot demo for ECE advising, course guidance, and knowledge-grounded answers."
+    />
+    <title>ECEasy | AI Advisor for ECE Students</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles/main.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header" id="top">
+      <div class="container header-inner">
+        <div class="brand" aria-label="ECEasy brand">
+          <div class="brand-badge" aria-hidden="true">E</div>
+          <div>
+            <p class="brand-title">ECEasy</p>
+            <p class="brand-subtitle">RAG Chatbot Demo</p>
+          </div>
+        </div>
+
+        <nav class="header-actions" aria-label="Primary actions">
+          <a class="btn btn-ghost" href="/ui/index.html">Open Old UI</a>
+          <a class="btn btn-primary" href="/newUI/index.html">Launch Chatbot</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main-content">
+      <section class="hero section">
+        <div class="container hero-grid">
+          <div>
+            <p class="pill">ECEasy Chatbot Demo</p>
+            <h1>Get HKUST ECE advising answers with citations in seconds.</h1>
+            <p class="hero-text">
+              ECEasy is a retrieval-augmented chatbot for HKUST ECE students. It combines
+              a curated knowledge base, web fallback, and LLM reasoning to support course,
+              program, and academic planning questions.
+            </p>
+            <div class="hero-actions">
+              <a class="btn btn-primary btn-lg" href="/newUI/index.html">Try Live Demo</a>
+              <a class="btn btn-ghost btn-lg" href="#how-it-works">Explore Workflow</a>
+            </div>
+            <p class="route-status" id="route-status" aria-live="polite"></p>
+            <div class="hero-stats" aria-label="Project highlights">
+              <article>
+                <h3>2</h3>
+                <p>Frontend options</p>
+              </article>
+              <article>
+                <h3>2</h3>
+                <p>Knowledge backends</p>
+              </article>
+              <article>
+                <h3>&lt;1s</h3>
+                <p>First token in local demo</p>
+              </article>
+            </div>
+
+            <div class="proof-strip" aria-label="Demo trust markers">
+              <span>Built for HKUST ECE advising</span>
+              <span>Reference-first responses</span>
+              <span>Local-first deployment</span>
+            </div>
+          </div>
+
+          <aside class="demo-card" aria-label="Example question card">
+            <p class="card-kicker">Sample Prompt</p>
+            <h2>What are the prerequisites for ELEC2400?</h2>
+            <p>
+              ECEasy retrieves syllabus chunks, ranks context, and streams a grounded answer with
+              references users can verify quickly.
+            </p>
+            <ul>
+              <li>Grounded with citations and snippets</li>
+              <li>Supports related follow-up questions</li>
+              <li>Works with FAISS or Chroma knowledge source</li>
+            </ul>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section" id="how-it-works">
+        <div class="container">
+          <h2>How ECEasy works</h2>
+          <p class="section-lead">
+            The backend streams responses while combining retrieval from local knowledge with optional web context.
+          </p>
+          <div class="steps-grid">
+            <article class="step-card">
+              <p class="step-number">1</p>
+              <h3>Retrieve</h3>
+              <p>Find matching chunks from FAISS or Chroma, then enrich when needed with web snippets.</p>
+            </article>
+            <article class="step-card">
+              <p class="step-number">2</p>
+              <h3>Generate</h3>
+              <p>Compose a grounded prompt and stream the answer token-by-token from the configured LLM provider.</p>
+            </article>
+            <article class="step-card">
+              <p class="step-number">3</p>
+              <h3>Support</h3>
+              <p>Offer references and related questions so students can continue planning with confidence.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-alt" id="features">
+        <div class="container">
+          <h2>Built for practical advising scenarios</h2>
+          <div class="feature-grid">
+            <article class="feature-card">
+              <h3>Course and curriculum lookup</h3>
+              <p>Search syllabus data by course code, prerequisites, and content focus.</p>
+            </article>
+            <article class="feature-card">
+              <h3>Flexible model/provider setup</h3>
+              <p>Run locally with Ollama or switch providers through environment configuration.</p>
+            </article>
+            <article class="feature-card">
+              <h3>Switchable interface modes</h3>
+              <p>Keep both old and new UI builds available for demos, fallback, and migration.</p>
+            </article>
+            <article class="feature-card">
+              <h3>Reference-first answers</h3>
+              <p>Responses are grounded on retrieved snippets and can include traceable sources.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="faq">
+        <div class="container faq-shell">
+          <div>
+            <h2>Quick FAQ</h2>
+            <p class="section-lead">Common questions for demo viewers, supervisors, and new users.</p>
+          </div>
+          <div class="faq-list" role="list">
+            <article class="faq-item" role="listitem">
+              <h3>Is this production-ready?</h3>
+              <p>This page is a demo front page. The chatbot backend is local-first and configurable for testing workflows.</p>
+            </article>
+            <article class="faq-item" role="listitem">
+              <h3>Can I switch knowledge sources?</h3>
+              <p>Yes. The backend supports switching between ECE FAISS knowledge and legacy Chroma knowledge by configuration.</p>
+            </article>
+            <article class="faq-item" role="listitem">
+              <h3>Where should I start?</h3>
+              <p>Use the launch button to enter the chatbot, then try a course-code question such as COMP2011 or ELEC2400.</p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <p>ECEasy Demo | Built for ECE advising exploration</p>
+        <a href="#top">Back to top</a>
+      </div>
+    </footer>
+
+    <script src="./scripts/main.js"></script>
+  </body>
+</html>
+
+

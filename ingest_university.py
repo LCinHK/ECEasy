@@ -31,7 +31,8 @@ SKIP_PATTERNS = {".DS_Store"}
 # Metadata enrichment controls
 PREPEND_METADATA_TO_CHUNK_TEXT = True
 
-COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)\b")
+# Supports patterns like: COMP2011, COMP 2011, COMP-2011, COMP2011_Spring2025-26
+COURSE_CODE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)(?![A-Za-z0-9])")
 
 
 def _normalize_course_code(raw: str) -> str:
@@ -51,9 +52,9 @@ def _extract_course_code(text: str) -> str:
 
 def _detect_doc_type(rel_path: Path) -> str:
     rel = str(rel_path).replace("\\", "/").lower()
-    if "/course syllabus/" in rel:
+    if "course syllabus/" in rel:
         return "course_syllabus"
-    if "/program requirement/" in rel:
+    if "program requirement/" in rel:
         return "program_requirement"
     if "faq" in rel:
         return "faq"
