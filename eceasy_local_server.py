@@ -69,7 +69,11 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
 # --- Common Config ---
 KV_NAME = "eceasy-chat-local.kv"
 REFERENCE_COUNT = 8 # change from 8 to 0
+<<<<<<< HEAD
 SHOULD_DO_RELATED_QUESTIONS = True # change from true to false
+=======
+SHOULD_DO_RELATED_QUESTIONS = False # change from true to false
+>>>>>>> main
 
 # --- Provider Specific Config ---
 
@@ -306,6 +310,7 @@ def stream_response(
     contexts = contexts[:REFERENCE_COUNT]
 
     # Send Contexts to client (for citations in UI)
+<<<<<<< HEAD
     # === New Switches for markers ===
     SEND_LLM_RESPONSE_MARKER = True    # Change to True if you want to send __LLM_RESPONSE__
                                         # SHOULD_DO_RELATED_QUESTIONS set to false if not use
@@ -318,6 +323,12 @@ def stream_response(
     if SEND_LLM_RESPONSE_MARKER:
         yield json.dumps(contexts)
         yield "\n\n__LLM_RESPONSE__\n\n"
+=======
+    
+    #yield json.dumps(contexts)
+    #yield "\n\n__LLM_RESPONSE__\n\n"
+
+>>>>>>> main
     # 2. Prepare enhanced LLM Prompt
     context_block = "\n\n".join(
         [f"[[citation:{i+1}]] {c['snippet']}" for i, c in enumerate(contexts)]
@@ -375,10 +386,19 @@ Answer in a supportive, encouraging, practical tone — like talking to a fellow
             logger.error(f"Related questions error: {e}")
 
     # 4. Cache Result
+<<<<<<< HEAD
     
     if search_uuid:
         full_response_data = [
             json.dumps(contexts),
+=======
+    if search_uuid:
+        full_response_data = [
+            json.dumps(contexts),
+            #"\n\n__LLM_RESPONSE__\n\n",
+            "".join(llm_response_accumulated),
+            #"\n\n__RELATED_QUESTIONS__\n\n" + related_questions_json
+>>>>>>> main
         ]
 
         if SEND_LLM_RESPONSE_MARKER:

@@ -89,3 +89,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+print(f"Total original documents loaded: {len(docs)}")
+for doc in docs[:10]:  # show first 10 as example
+    print(f"- {doc.metadata.get('source', 'unknown')}")

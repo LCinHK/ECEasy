@@ -3,6 +3,10 @@ import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
 import { MessageInput } from './components/MessageInput';
 import { Menu } from 'lucide-react';
+<<<<<<< HEAD
+=======
+// enable stop button for text generation
+>>>>>>> main
 
 // Interfaces (you can move to separate file later)
 interface Source {

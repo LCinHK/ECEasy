@@ -1,7 +1,12 @@
 fastapi
 httpx
 loguru
+<<<<<<< HEAD
 
+=======
+pydantic
+hf_xet
+>>>>>>> main
 openai
 duckduckgo-search
 langchain-community==0.3.14

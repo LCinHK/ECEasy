@@ -1,6 +1,10 @@
 import { Send, Paperclip, X, Square } from 'lucide-react';
 import { useState, KeyboardEvent, useRef } from 'react';
+<<<<<<< HEAD
 
+=======
+// enable stop button to terminate text generation
+>>>>>>> main
 interface MessageInputProps {
   onSendMessage: (message: string) => void;
   disabled?: boolean;
