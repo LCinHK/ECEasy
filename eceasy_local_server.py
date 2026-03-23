@@ -19,14 +19,13 @@ import warnings
 warnings.filterwarnings("ignore", message=".*Accessing the 'model_fields' attribute on the instance is deprecated.*")
 
 import re
-import threading
 import shelve
 import uuid
 from typing import List, Generator, Optional
 from pydantic import BaseModel
 
 # ======== FastAPI Imports ========
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import StreamingResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -144,42 +143,68 @@ class QueryRequest(BaseModel):
     query: str
     search_uuid: str
     generate_related_questions: Optional[bool] = True
+    llm_provider: Optional[str] = None
+    api_key: Optional[str] = None
+    use_server_key: Optional[bool] = None
 
 # ======== Helper Functions ========
 
-def get_llm_client():
+def get_model_name_for_provider(provider: str) -> str:
+    if provider == "openai":
+        return OPENAI_MODEL
+    if provider == "deepseek":
+        return DEEPSEEK_MODEL
+    return OLLAMA_MODEL
+
+
+def resolve_runtime_llm_config(request: QueryRequest) -> tuple[openai.OpenAI, str, str, bool]:
     """
-    Returns a thread-local OpenAI client configured for the selected provider.
+    Resolve provider/model/client for this request.
+
+    Returns: (client, provider, model, using_server_key)
     """
-    thread_local = threading.local()
-    if hasattr(thread_local, "client"):
-        return thread_local.client
+    provider = (request.llm_provider or LLM_PROVIDER).lower()
+    if provider not in {"ollama", "openai", "deepseek"}:
+        raise HTTPException(status_code=400, detail="llm_provider must be one of: ollama, openai, deepseek")
 
-    if LLM_PROVIDER == "openai":
-        if not OPENAI_API_KEY:
-            logger.error("OPENAI_API_KEY is missing. Please set it in .env or environment variables.")
-        client = openai.OpenAI(
-            api_key=OPENAI_API_KEY,
-            base_url=OPENAI_BASE_URL
-        )
-
-    elif LLM_PROVIDER == "deepseek":
-        if not DEEPSEEK_API_KEY:
-            logger.error("DEEPSEEK_API_KEY is missing. Please set it in .env or environment variables.")
-        client = openai.OpenAI(
-            api_key=DEEPSEEK_API_KEY,
-            base_url=DEEPSEEK_BASE_URL
-        )
-
-    else: # Default to Ollama
+    if provider == "ollama":
         client = openai.OpenAI(
             base_url=OLLAMA_BASE_URL,
-            api_key="ollama", # API key is not required for local Ollama
+            api_key="ollama",  # API key is not required for local Ollama
             timeout=httpx.Timeout(connect=10.0, read=120.0, write=120.0, pool=10.0),
         )
+        return client, provider, OLLAMA_MODEL, True
 
-    thread_local.client = client
-    return client
+    user_api_key = (request.api_key or "").strip()
+    legacy_client_mode = (
+        request.llm_provider is None
+        and request.api_key is None
+        and request.use_server_key is None
+    )
+    using_server_key = bool(request.use_server_key)
+
+    # Keep old UI compatibility: if no new runtime fields are provided, use server-side key.
+    if legacy_client_mode:
+        using_server_key = True
+
+    if not user_api_key and not using_server_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Provide api_key or set use_server_key=true for remote providers.",
+        )
+
+    if provider == "openai":
+        api_key = OPENAI_API_KEY if using_server_key else user_api_key
+        if not api_key:
+            raise HTTPException(status_code=400, detail="OpenAI API key is required for the selected mode.")
+        client = openai.OpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
+    else:
+        api_key = DEEPSEEK_API_KEY if using_server_key else user_api_key
+        if not api_key:
+            raise HTTPException(status_code=400, detail="DeepSeek API key is required for the selected mode.")
+        client = openai.OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+
+    return client, provider, get_model_name_for_provider(provider), using_server_key
 
 def search_with_duckduckgo(query: str) -> List[dict]:
     """
@@ -223,7 +248,12 @@ def search_with_duckduckgo(query: str) -> List[dict]:
         logger.warning(f"DuckDuckGo search failed: {e}")
         return []
 
-def get_related_questions(query: str, contexts: List[dict]) -> List[str]:
+def get_related_questions(
+    query: str,
+    contexts: List[dict],
+    client: openai.OpenAI,
+    model_name: str,
+) -> List[str]:
     """
     Generates related questions using the local LLM.
     """
@@ -236,9 +266,8 @@ def get_related_questions(query: str, contexts: List[dict]) -> List[str]:
     prompt += f"\n{query}"
 
     try:
-        client = get_llm_client()
         response = client.chat.completions.create(
-            model=LLM_MODEL,
+            model=model_name,
             messages=[
                 {"role": "user", "content": prompt},
             ],
@@ -273,7 +302,9 @@ def get_related_questions(query: str, contexts: List[dict]) -> List[str]:
 def stream_response(
     query: str,
     search_uuid: str,
-    generate_related_questions: bool
+    generate_related_questions: bool,
+    client: openai.OpenAI,
+    model_name: str,
 ) -> Generator[str, None, None]:
     """
     Main logic to:
@@ -321,9 +352,8 @@ def stream_response(
     llm_response_accumulated = []
 
     try:
-        client = get_llm_client()
         stream = client.chat.completions.create(
-            model=LLM_MODEL,
+            model=model_name,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": query},
@@ -350,7 +380,7 @@ def stream_response(
     related_questions_json = "[]"
     if SHOULD_DO_RELATED_QUESTIONS and generate_related_questions:
         try:
-            questions = get_related_questions(query, contexts)
+            questions = get_related_questions(query, contexts, client, model_name)
             # Frontend expects keywords/questions in an object with "question" key
             formatted_questions = [{"question": q} for q in questions]
             related_questions_json = json.dumps(formatted_questions)
@@ -381,11 +411,6 @@ app = FastAPI()
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     logger.error(f"Validation error: {exc.errors()}")
-    try:
-        body = await request.json()
-        logger.error(f"Request body: {body}")
-    except:
-        pass
     return JSONResponse(
         status_code=422,
         content={"detail": exc.errors()},
@@ -401,7 +426,18 @@ app.add_middleware(
 
 @app.post("/query")
 async def query_endpoint(request: QueryRequest):
-    logger.info(f"Received query: {request.query}")
+    try:
+        client, provider, model_name, using_server_key = resolve_runtime_llm_config(request)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to resolve LLM runtime config: {e}")
+        raise HTTPException(status_code=500, detail="Failed to initialize LLM provider")
+
+    logger.info(
+        f"Received query (provider={provider}, model={model_name}, key_source={'server' if using_server_key else 'user'})"
+    )
+
     # Check cache first
     if request.search_uuid:
         try:
@@ -415,7 +451,13 @@ async def query_endpoint(request: QueryRequest):
             pass
 
     return StreamingResponse(
-        stream_response(request.query, request.search_uuid, request.generate_related_questions),
+        stream_response(
+            request.query,
+            request.search_uuid,
+            bool(request.generate_related_questions),
+            client,
+            model_name,
+        ),
         media_type="text/plain"
     )
 

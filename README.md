@@ -26,6 +26,9 @@ Copy `.env.example` to `.env` and configure the following options:
 
 ### LLM Provider Selection
 
+For `UI_VERSION="newUI"`, users can choose provider (`OpenAI`/`DeepSeek`) and enter their own API key in the chat UI before sending messages.
+If they skip, ECEasy uses server keys from `.env` (this may incur shared project costs and can be rate-limited).
+
 #### OpenAI:
 ```dotenv
 LLM_PROVIDER="openai"
@@ -188,6 +191,12 @@ See `./testing/README.md` for detailed documentation.
 - ✅ Ollama (local, no API keys needed)
 - ✅ OpenAI (requires API key)
 - ✅ DeepSeek (requires API key)
+
+### API Key Mode (New UI)
+- ✅ Prompt users to select `OpenAI` or `DeepSeek`
+- ✅ Allow users to provide their own API key per chat session
+- ✅ Allow explicit skip to use server-side key with cost warning
+- ✅ Keep backward compatibility for old UI / legacy clients (server key path)
 
 ### Knowledge Bases
 - ✅ **FAISS** — Fast vector search over structured course/department knowledge
