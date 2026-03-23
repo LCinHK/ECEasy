@@ -123,12 +123,12 @@ def _resolve_embedding_model() -> tuple[str, str]:
     each other. Must stay in sync with faiss_rag.py.
     """
     hub_name = os.environ.get("EMBEDDING_MODEL_HUB_NAME", "all-MiniLM-L6-v2").strip()
-    index_path = _index_name_from_hub(hub_name)
+    base_dir = Path(__file__).resolve().parent
+    index_path = str(base_dir / _index_name_from_hub(hub_name))
 
     local_path = os.environ.get("EMBEDDING_MODEL_LOCAL_PATH", "").strip()
     if local_path:
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        resolved = os.path.normpath(os.path.join(base_dir, local_path))
+        resolved = os.path.normpath(os.path.join(str(base_dir), local_path))
         if os.path.isdir(resolved):
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["HF_DATASETS_OFFLINE"] = "1"

@@ -4,6 +4,26 @@ This directory contains diagnostic and visualization scripts for inspecting the 
 
 ## Scripts
 
+### 0. `test_server_split.py`
+Smoke tests for the new `eceasy_server/` module split (llm/retrieval/streaming/app).
+
+**What it checks:**
+- FastAPI routes are still mounted (`/query`, `/`, `/frontpage`)
+- LLM runtime config rejects invalid provider values
+- LLM runtime config enforces API key rules for remote providers
+- Streaming pipeline emits markers (`__LLM_RESPONSE__`, `__RELATED_QUESTIONS__`, `__SUGGESTED_IMAGES__`)
+
+**Usage:**
+```powershell
+python test_server_split.py
+```
+
+**When to use:**
+- After refactoring server modules
+- Before committing server architecture changes
+
+---
+
 ### 1. `inspect_faiss.py`
 Inspect index statistics and metadata distribution.
 
