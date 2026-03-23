@@ -124,7 +124,7 @@ ECEasy has two UI options; each must be built separately.
 ### Option A: Build New UI (React/Vite) — Recommended
 
 ```bash
-cd newDesign/Aichatbotinterfacedesign
+cd newDesign/AiChatBotInterfaceDesign
 npm install
 npm run build
 ```
