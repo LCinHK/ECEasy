@@ -1,4 +1,5 @@
-import { Bot, User, BookText, MessageSquareQuote, ExternalLink } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Bot, User, BookText, MessageSquareQuote, ExternalLink, Image as ImageIcon } from 'lucide-react';
 import Markdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -12,7 +13,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/app/components/ui/popover';
-import type { Source, Relate } from '@/app/utils/parse-streaming';
+import { ImageWithFallback } from '@/app/components/figma/ImageWithFallback';
+import type { Source, Relate, SuggestedImage } from '@/app/utils/parse-streaming';
 
 interface ChatMessageProps {
   role: 'user' | 'assistant';
@@ -22,10 +24,51 @@ interface ChatMessageProps {
   sources?: Source[];
   /** Related questions, present after the stream finishes */
   relates?: Relate[] | null;
+  /** Suggested images, present after the stream finishes */
+  suggestedImages?: SuggestedImage[];
   /** True while the LLM is still streaming this message */
   isStreaming?: boolean;
   /** Callback when the user clicks a related question chip */
   onRelatedQuestion?: (question: string) => void;
+}
+
+// ── Suggested images ──────────────────────────────────────────────────────────
+function SuggestedImagesPanel({
+  images,
+  onOpen,
+}: {
+  images: SuggestedImage[];
+  onOpen: (image: SuggestedImage) => void;
+}) {
+  if (images.length === 0) return null;
+
+  return (
+    <div className="mt-4">
+      <div className="flex items-center gap-2 text-xs font-semibold text-gray-500 mb-2">
+        <ImageIcon size={14} /> Suggested Images
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        {images.map((img) => (
+          <button
+            key={img.source_relpath}
+            type="button"
+            onClick={() => onOpen(img)}
+            className="w-full text-left bg-amber-100 hover:bg-amber-200 border border-amber-200 rounded-lg overflow-hidden transition-colors"
+          >
+            <ImageWithFallback
+              src={img.path}
+              alt={img.description}
+              className="w-full h-40 object-cover"
+            />
+            <div className="p-2">
+              <div className="text-sm font-medium text-gray-900 line-clamp-2">{img.description}</div>
+              <div className="text-xs text-gray-500 mt-1">[{img.doc_type}]</div>
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 // ── Citation popover bubble ──────────────────────────────────────────────────
@@ -149,10 +192,27 @@ export function ChatMessage({
   content,
   sources = [],
   relates,
+  suggestedImages = [],
   isStreaming = false,
   onRelatedQuestion,
 }: ChatMessageProps) {
   const isUser = role === 'user';
+  const [expandedImage, setExpandedImage] = useState<SuggestedImage | null>(null);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setExpandedImage(null);
+      }
+    };
+
+    if (expandedImage) {
+      window.addEventListener('keydown', onKeyDown);
+    }
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [expandedImage]);
 
   return (
     <div className={`flex gap-4 px-4 py-6 ${isUser ? 'bg-amber-100' : 'bg-amber-50'}`}>
@@ -245,10 +305,52 @@ export function ChatMessage({
 
               {/* Related questions — shown only after streaming completes */}
               {!isStreaming && relates && <RelatedPanel relates={relates} onSelect={onRelatedQuestion} />}
+
+              {/* Suggested images — shown only after streaming completes */}
+              {!isStreaming && suggestedImages.length > 0 && (
+                <SuggestedImagesPanel images={suggestedImages} onOpen={setExpandedImage} />
+              )}
             </>
           )}
         </div>
       </div>
+
+      {/* Image modal */}
+      {expandedImage && (
+        <div
+          className="fixed inset-0 z-[100] bg-black/70 flex items-center justify-center p-4"
+          onClick={() => setExpandedImage(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Expanded suggested image"
+        >
+          <div
+            className="relative w-full max-w-5xl bg-white rounded-xl overflow-hidden shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              type="button"
+              className="absolute top-3 right-3 z-10 px-3 py-1.5 text-xs rounded-md bg-black/70 text-white hover:bg-black/80"
+              onClick={() => setExpandedImage(null)}
+            >
+              Close
+            </button>
+            <div className="bg-gray-50 max-h-[80vh] overflow-auto">
+              <ImageWithFallback
+                src={expandedImage.path}
+                alt={expandedImage.description}
+                className="w-full h-auto max-h-[72vh] object-contain bg-gray-100"
+              />
+            </div>
+            <div className="p-3 border-t border-gray-200">
+              <div className="text-sm font-medium text-gray-900">{expandedImage.description}</div>
+              <div className="text-xs text-gray-500 mt-1">
+                [{expandedImage.doc_type}] {expandedImage.source_relpath}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

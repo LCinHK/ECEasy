@@ -1,6 +1,6 @@
 """
 FAISS-based RAG module for ECEasy.
-Uses the FAISS index built from ECEknowledge/ (by ingest_university.py).
+Uses the FAISS index built from ECEknowledge/ (by ingest_FAISS.py).
 The embedding model and index path are both controlled via .env.
 """
 

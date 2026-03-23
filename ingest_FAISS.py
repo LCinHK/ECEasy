@@ -1,15 +1,18 @@
 """
 Ingestion script for ECEasy FAISS knowledge base.
-Reads all .pdf, .docx, and .txt files from ECEknowledge/ and builds
+Reads all .pdf, .docx, .txt, and image files from ECEknowledge/ and builds
 (or rebuilds) the FAISS index at faiss_index_MODELNAME.
 
+Also generates an image manifest (JSON) for quick frontend/backend reference.
+
 Dependencies (install before running):
-    pip install pypdf docx2txt faiss-cpu langchain-community langchain-huggingface langchain-text-splitters
+    pip install pypdf docx2txt faiss-cpu langchain-community langchain-huggingface langchain-text-splitters pillow
 """
 
 import os
 import re
 import shutil
+import json
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,6 +30,9 @@ DATA_PATH = Path("ECEknowledge")       # Source knowledge folder
 
 # Files / patterns to skip (e.g. macOS metadata files)
 SKIP_PATTERNS = {".DS_Store"}
+
+# Image file extensions to catalog
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 
 # Metadata enrichment controls
 PREPEND_METADATA_TO_CHUNK_TEXT = True
@@ -138,6 +144,77 @@ def _resolve_embedding_model() -> tuple[str, str]:
     return hub_name, index_path
 
 
+def _extract_image_metadata(file_path: Path, data_path: Path) -> dict:
+    """
+    Extract metadata from image file name and path.
+    Example: "./ECEknowledge/course syllabus/common core courese/Common_Core_Course.png"
+    → { "source_relpath": "course syllabus/common core courese/Common_Core_Course.png",
+        "source_name": "Common_Core_Course.png",
+        "doc_type": "course_requirement",
+        "department": "common_core",
+        "course_code": "",
+        "description_from_filename": "Common Core Course" }
+    """
+    rel_path = file_path.relative_to(data_path)
+    rel_posix = str(rel_path).replace("\\", "/")
+
+    # Extract course code if present in filename or path
+    course_code = _extract_course_code(file_path.stem)
+    if not course_code:
+        course_code = _extract_course_code(rel_posix)
+
+    # Extract department from path or course code
+    dept = ""
+    if course_code:
+        dept = course_code[:4]
+    else:
+        for part in rel_path.parts:
+            up = part.upper()
+            if re.fullmatch(r"[A-Z]{4}", up):
+                dept = up
+                break
+
+    # Infer doc type from path
+    doc_type = _detect_doc_type(rel_path)
+
+    # Extract human-readable description from filename (e.g., "Common_Core_Course.png" → "Common Core Course")
+    stem_clean = file_path.stem.replace("_", " ").replace("-", " ")
+
+    return {
+        "source_relpath": rel_posix,
+        "source_name": file_path.name,
+        "source_stem": file_path.stem,
+        "file_size_bytes": file_path.stat().st_size,
+        "doc_type": doc_type,
+        "department": dept,
+        "course_code": course_code,
+        "description": stem_clean,
+    }
+
+
+def load_all_images(data_path: Path) -> list[dict]:
+    """
+    Scan for all image files (.png, .jpg, .jpeg) in data_path recursively.
+    Return list of image metadata dicts (not embedded, just cataloged).
+    """
+    image_manifest = []
+    image_files = sorted(data_path.rglob("*"))
+    image_files = [f for f in image_files if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS]
+
+    print(f"  Found {len(image_files)} image file(s)")
+    for img_path in image_files:
+        if img_path.name in SKIP_PATTERNS:
+            continue
+        try:
+            metadata = _extract_image_metadata(img_path, data_path)
+            image_manifest.append(metadata)
+            print(f"    [IMG]  {metadata['source_relpath']}  ({metadata.get('file_size_bytes', 0) / 1024:.1f} KB)")
+        except Exception as e:
+            print(f"    [IMG]  SKIP {img_path.name}: {e}")
+
+    return image_manifest
+
+
 def load_all_documents(data_path: Path):
     """
     Load all .pdf, .docx, and .txt files recursively from data_path.
@@ -226,6 +303,11 @@ def main():
     docs = load_all_documents(DATA_PATH)
     print(f"\nTotal raw pages/docs loaded: {len(docs)}")
 
+    # Load images
+    print(f"\nCataloging images from '{DATA_PATH}'...")
+    image_manifest = load_all_images(DATA_PATH)
+    print(f"Total images cataloged: {len(image_manifest)}")
+
     if len(docs) == 0:
         print("No documents loaded → nothing to index. Add files and retry.")
         return
@@ -294,6 +376,16 @@ def main():
 
     vectorstore.save_local(index_path)
     print(f"\nDone! FAISS index saved to: '{index_path}' ({len(chunks)} vectors)")
+
+    # Save image manifest alongside FAISS index
+    if image_manifest:
+        manifest_path = Path(index_path) / "image_manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(image_manifest, f, indent=2, ensure_ascii=False)
+        print(f"Image manifest saved to: '{manifest_path}' ({len(image_manifest)} images)")
+    else:
+        print("No images found to catalog.")
 
 
 if __name__ == "__main__":

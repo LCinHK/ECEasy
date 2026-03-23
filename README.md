@@ -106,7 +106,7 @@ If using `KNOWLEDGE="faiss"`, you must first ingest documents from `./ECEknowled
 
 ```bash
 pip install -r requirements_local.txt
-python ingest_university.py
+python ingest_FAISS.py
 ```
 
 This will:

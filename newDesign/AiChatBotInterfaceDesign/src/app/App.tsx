@@ -6,7 +6,7 @@ import { Menu } from 'lucide-react';
 import logo from '../assets/icon.svg';
 import { nanoid } from 'nanoid';
 import { parseStreaming } from './utils/parse-streaming';
-import type { Source, Relate } from './utils/parse-streaming';
+import type { Source, Relate, SuggestedImage } from './utils/parse-streaming';
 
 type UserLlmProvider = 'openai' | 'deepseek';
 
@@ -16,6 +16,7 @@ interface Message {
   content: string;
   sources?: Source[];
   relates?: Relate[] | null;
+  suggestedImages?: SuggestedImage[];
   isStreaming?: boolean;
 }
 
@@ -97,6 +98,7 @@ export default function App() {
       content: '',
       sources: [],
       relates: null,
+      suggestedImages: [],
       isStreaming: true,
     };
 
@@ -136,6 +138,12 @@ export default function App() {
             )
           );
           setIsLoading(false);
+        },
+        // onSuggestedImages — called once the stream finishes
+        (suggestedImages) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, suggestedImages } : m))
+          );
         },
         // onError
         (status) => {
@@ -313,6 +321,7 @@ export default function App() {
                 content={message.content}
                 sources={message.sources}
                 relates={message.relates}
+                suggestedImages={message.suggestedImages}
                 isStreaming={message.isStreaming}
                 onRelatedQuestion={(q) => handleSendMessage(q)}
               />

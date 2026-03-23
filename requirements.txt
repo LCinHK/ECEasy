@@ -12,7 +12,7 @@ langchain-huggingface==0.1.2
 langchain-openai==0.3.1
 langchain-text-splitters
 torch
-
+pillow
 python-dotenv
 # --- RAG / Ingestion dependencies ---
 faiss-cpu

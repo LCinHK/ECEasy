@@ -36,6 +36,13 @@ export interface Relate {
   question: string;
 }
 
+export interface SuggestedImage {
+  path: string;
+  description: string;
+  doc_type: string;
+  source_relpath: string;
+}
+
 export interface LlmRuntimeConfig {
   llmProvider?: 'openai' | 'deepseek';
   apiKey?: string;
@@ -44,6 +51,7 @@ export interface LlmRuntimeConfig {
 
 const LLM_SPLIT = '__LLM_RESPONSE__';
 const RELATED_SPLIT = '__RELATED_QUESTIONS__';
+const IMAGES_SPLIT = '__SUGGESTED_IMAGES__';
 
 /**
  * Converts raw LLM markdown text with [[citation:N]] tokens into
@@ -65,6 +73,7 @@ export async function parseStreaming(
   onSources: (sources: Source[]) => void,
   onMarkdown: (markdown: string) => void,
   onRelates: (relates: Relate[]) => void,
+  onSuggestedImages: (images: SuggestedImage[]) => void,
   onError?: (status: number) => void,
 ): Promise<void> {
   const response = await fetch('/query', {
@@ -94,12 +103,17 @@ export async function parseStreaming(
   let sourcesEmitted = false;
 
   const updateMarkdown = (raw: string) => {
-    if (raw.includes(RELATED_SPLIT)) {
-      const [md] = raw.split(RELATED_SPLIT);
+    const cutMarkers = [RELATED_SPLIT, IMAGES_SPLIT]
+      .map((m) => raw.indexOf(m))
+      .filter((idx) => idx >= 0);
+
+    if (cutMarkers.length > 0) {
+      const md = raw.slice(0, Math.min(...cutMarkers));
       onMarkdown(markdownParse(md));
-    } else {
-      onMarkdown(markdownParse(raw));
+      return;
     }
+
+    onMarkdown(markdownParse(raw));
   };
 
   while (true) {
@@ -129,8 +143,10 @@ export async function parseStreaming(
 
   // Parse related questions from the end of the accumulated stream
   if (chunks.includes(RELATED_SPLIT)) {
-    const parts = chunks.split(RELATED_SPLIT);
-    const relatesJson = parts[parts.length - 1];
+    const relatedStart = chunks.lastIndexOf(RELATED_SPLIT) + RELATED_SPLIT.length;
+    const imagesStart = chunks.indexOf(IMAGES_SPLIT, relatedStart);
+    const relatesJson =
+      imagesStart >= 0 ? chunks.slice(relatedStart, imagesStart) : chunks.slice(relatedStart);
     try {
       onRelates(JSON.parse(relatesJson.trim()));
     } catch {
@@ -138,6 +154,17 @@ export async function parseStreaming(
     }
   } else {
     onRelates([]);
+  }
+
+  if (chunks.includes(IMAGES_SPLIT)) {
+    const imagesJson = chunks.slice(chunks.lastIndexOf(IMAGES_SPLIT) + IMAGES_SPLIT.length);
+    try {
+      onSuggestedImages(JSON.parse(imagesJson.trim()));
+    } catch {
+      onSuggestedImages([]);
+    }
+  } else {
+    onSuggestedImages([]);
   }
 }
 

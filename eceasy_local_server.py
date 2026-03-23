@@ -21,6 +21,7 @@ warnings.filterwarnings("ignore", message=".*Accessing the 'model_fields' attrib
 import re
 import shelve
 import uuid
+from contextlib import asynccontextmanager
 from typing import List, Generator, Optional
 from pydantic import BaseModel
 
@@ -48,6 +49,16 @@ except ImportError:
 
 # ======== Local Imports ========
 import ecEasyPrompts
+
+# ======== Image Support ========
+try:
+    from image_retrieval import ImageRetriever, suggest_images_for_response
+    image_retriever = None  # Will be initialized at startup
+except ImportError:
+    logger.warning("image_retrieval module not found. Image suggestions will be disabled.")
+    ImageRetriever = None
+    suggest_images_for_response = None
+    image_retriever = None
 
 # ======== Load .env first — all os.environ.get() calls below will pick it up ========
 from dotenv import load_dotenv
@@ -146,6 +157,19 @@ class QueryRequest(BaseModel):
     llm_provider: Optional[str] = None
     api_key: Optional[str] = None
     use_server_key: Optional[bool] = None
+
+class ImageSuggestion(BaseModel):
+    path: str
+    description: str
+    doc_type: str
+    source_relpath: str
+
+class ChatResponse(BaseModel):
+    text: Optional[str] = None
+    contexts: Optional[List[dict]] = None
+    related_questions: Optional[List[str]] = None
+    suggested_images: Optional[List[ImageSuggestion]] = None
+    flowchart: Optional[str] = None
 
 # ======== Helper Functions ========
 
@@ -311,7 +335,8 @@ def stream_response(
     1. Retrieve context (RAG + Web)
     2. Stream LLM Answer
     3. Stream Related Questions
-    4. Cache results
+    4. Suggest Images
+    5. Cache results
     """
 
     # 1. Retrieve Contexts
@@ -389,7 +414,30 @@ def stream_response(
         except Exception as e:
             logger.error(f"Related questions error: {e}")
 
-    # 4. Cache Result
+    # 4. Suggest Images
+    suggested_images_json = "[]"
+    if image_retriever is not None:
+        try:
+            llm_response_text = "".join(llm_response_accumulated)
+            image_suggestions = suggest_images_for_response(query, llm_response_text, image_retriever)
+            formatted_images = [
+                {
+                    "path": f"/ECEknowledge/{img['source_relpath']}",
+                    "description": img.get("description", ""),
+                    "doc_type": img.get("doc_type", "general"),
+                    "source_relpath": img["source_relpath"]
+                }
+                for img in image_suggestions
+            ]
+            if formatted_images:
+                suggested_images_json = json.dumps(formatted_images)
+                logger.info(f"Suggested {len(formatted_images)} images for query")
+                yield "\n\n__SUGGESTED_IMAGES__\n\n"
+                yield suggested_images_json
+        except Exception as e:
+            logger.warning(f"Image suggestion error: {e}")
+
+    # 5. Cache Result
     # We cache the full interaction for the "UUID" retrieval
     if search_uuid:
         full_response_data = [
@@ -398,6 +446,9 @@ def stream_response(
             "".join(llm_response_accumulated),
             "\n\n__RELATED_QUESTIONS__\n\n" + related_questions_json
         ]
+        if image_retriever is not None and suggested_images_json != "[]":
+            full_response_data.extend(["\n\n__SUGGESTED_IMAGES__\n\n", suggested_images_json])
+        
         try:
             with shelve.open(KV_NAME) as db:
                 db[search_uuid] = full_response_data
@@ -406,7 +457,24 @@ def stream_response(
 
 # ======== FastAPI App ========
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    """Initialize app-level resources on startup and release on shutdown."""
+    global image_retriever
+    if ImageRetriever is not None:
+        try:
+            image_retriever = ImageRetriever()
+            num_images = len(image_retriever.get_all_images())
+            logger.info(f"Image retriever initialized: {num_images} images available")
+        except Exception as e:
+            logger.warning(f"Failed to initialize image retriever: {e}. Image suggestions will be disabled.")
+            image_retriever = None
+    else:
+        logger.warning("ImageRetriever not available. Image suggestions will be disabled.")
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
@@ -484,6 +552,8 @@ if os.path.exists("newUI"):
     app.mount("/newUI", StaticFiles(directory="newUI"), name="newUI")
 if os.path.exists(os.path.join("newDesign", "FrontPage")):
     app.mount("/frontpage", StaticFiles(directory=os.path.join("newDesign", "FrontPage")), name="frontpage")
+if os.path.exists("ECEknowledge"):
+    app.mount("/ECEknowledge", StaticFiles(directory="ECEknowledge"), name="eceknowledge")
 if os.path.exists("localData"):
     app.mount("/localData", StaticFiles(directory="localData"), name="localData")
 
