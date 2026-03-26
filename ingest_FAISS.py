@@ -1,12 +1,13 @@
 """
 Ingestion script for ECEasy FAISS knowledge base.
-Reads all .pdf, .docx, .txt, and image files from ECEknowledge/ and builds
+Reads all .pdf, .docx, .txt, .html, and image files from ECEknowledge/ and builds
 (or rebuilds) the FAISS index at faiss_index_MODELNAME.
 
 Also generates an image manifest (JSON) for quick frontend/backend reference.
 
 Dependencies (install before running):
-    pip install pypdf docx2txt faiss-cpu langchain-community langchain-huggingface langchain-text-splitters pillow
+    pip install pypdf docx2txt faiss-cpu langchain-community langchain-huggingface 
+               langchain-text-splitters pillow beautifulsoup4
 """
 
 import os
@@ -18,15 +19,18 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
-from langchain_community.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
+from langchain_community.document_loaders import (
+    PyPDFLoader, 
+    Docx2txtLoader, 
+    TextLoader,
+    BSHTMLLoader   # ← NEW: Added for HTML support
+)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 # ======== Configuration ========
 DATA_PATH = Path("ECEknowledge")       # Source knowledge folder
-# Note: INDEX_PATH is now derived automatically from EMBEDDING_MODEL_HUB_NAME in .env
-# e.g. "BAAI/bge-small-en-v1.5" → "./faiss_index_bge-small-en-v1.5"
 
 # Files / patterns to skip (e.g. macOS metadata files)
 SKIP_PATTERNS = {".DS_Store"}
@@ -100,28 +104,11 @@ def _extract_structured_metadata(file_path: Path, data_path: Path) -> dict:
 
 
 def _index_name_from_hub(hub_name: str) -> str:
-    """
-    Derives a filesystem-safe FAISS index folder name from a Hub model name.
-      "BAAI/bge-small-en-v1.5"  →  "faiss_index_bge-small-en-v1.5"
-      "all-MiniLM-L6-v2"        →  "faiss_index_all-MiniLM-L6-v2"
-    """
     short = hub_name.split("/")[-1]
     return f"faiss_index_{short}"
 
 
 def _resolve_embedding_model() -> tuple[str, str]:
-    """
-    Returns (model_name_or_path, faiss_index_path).
-
-    Model resolution priority:
-      1. If EMBEDDING_MODEL_LOCAL_PATH in .env points to an existing local directory
-         → use it directly (fully offline; sets TRANSFORMERS_OFFLINE=1).
-      2. Otherwise use EMBEDDING_MODEL_HUB_NAME as a Hub ID for auto-download/cache.
-
-    The FAISS index folder is always derived from EMBEDDING_MODEL_HUB_NAME so that
-    different models store their indexes in separate directories and never overwrite
-    each other. Must stay in sync with faiss_rag.py.
-    """
     hub_name = os.environ.get("EMBEDDING_MODEL_HUB_NAME", "all-MiniLM-L6-v2").strip()
     base_dir = Path(__file__).resolve().parent
     index_path = str(base_dir / _index_name_from_hub(hub_name))
@@ -135,9 +122,6 @@ def _resolve_embedding_model() -> tuple[str, str]:
             print(f"[Embedding] Using local model folder: '{resolved}' (offline)")
             print(f"[Embedding] FAISS index will be saved to: '{index_path}'")
             return resolved, index_path
-        else:
-            print(f"[Embedding] WARNING: EMBEDDING_MODEL_LOCAL_PATH '{local_path}' "
-                  f"(resolved: '{resolved}') not found — falling back to HuggingFace Hub.")
 
     print(f"[Embedding] Using HuggingFace Hub model: '{hub_name}' (requires internet on first run)")
     print(f"[Embedding] FAISS index will be saved to: '{index_path}'")
@@ -145,25 +129,13 @@ def _resolve_embedding_model() -> tuple[str, str]:
 
 
 def _extract_image_metadata(file_path: Path, data_path: Path) -> dict:
-    """
-    Extract metadata from image file name and path.
-    Example: "./ECEknowledge/course syllabus/common core courese/Common_Core_Course.png"
-    → { "source_relpath": "course syllabus/common core courese/Common_Core_Course.png",
-        "source_name": "Common_Core_Course.png",
-        "doc_type": "course_requirement",
-        "department": "common_core",
-        "course_code": "",
-        "description_from_filename": "Common Core Course" }
-    """
     rel_path = file_path.relative_to(data_path)
     rel_posix = str(rel_path).replace("\\", "/")
 
-    # Extract course code if present in filename or path
     course_code = _extract_course_code(file_path.stem)
     if not course_code:
         course_code = _extract_course_code(rel_posix)
 
-    # Extract department from path or course code
     dept = ""
     if course_code:
         dept = course_code[:4]
@@ -174,10 +146,7 @@ def _extract_image_metadata(file_path: Path, data_path: Path) -> dict:
                 dept = up
                 break
 
-    # Infer doc type from path
     doc_type = _detect_doc_type(rel_path)
-
-    # Extract human-readable description from filename (e.g., "Common_Core_Course.png" → "Common Core Course")
     stem_clean = file_path.stem.replace("_", " ").replace("-", " ")
 
     return {
@@ -193,10 +162,6 @@ def _extract_image_metadata(file_path: Path, data_path: Path) -> dict:
 
 
 def load_all_images(data_path: Path) -> list[dict]:
-    """
-    Scan for all image files (.png, .jpg, .jpeg) in data_path recursively.
-    Return list of image metadata dicts (not embedded, just cataloged).
-    """
     image_manifest = []
     image_files = sorted(data_path.rglob("*"))
     image_files = [f for f in image_files if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS]
@@ -217,13 +182,12 @@ def load_all_images(data_path: Path) -> list[dict]:
 
 def load_all_documents(data_path: Path):
     """
-    Load all .pdf, .docx, and .txt files recursively from data_path.
-    Uses per-file loaders for better error isolation and metadata accuracy.
+    Load all .pdf, .docx, .txt, and .html files recursively from data_path.
     """
     all_docs = []
     skipped = []
 
-    # --- PDFs (per-file for accurate page metadata) ---
+    # --- PDFs ---
     pdf_files = sorted(data_path.rglob("*.pdf"))
     print(f"  Found {len(pdf_files)} PDF file(s)")
     for pdf_path in pdf_files:
@@ -233,7 +197,6 @@ def load_all_documents(data_path: Path):
             loader = PyPDFLoader(str(pdf_path))
             docs = loader.load()
             structured_meta = _extract_structured_metadata(pdf_path, data_path)
-            # Ensure 'source' metadata is the relative path string for consistency
             for doc in docs:
                 doc.metadata["source"] = str(pdf_path)
                 doc.metadata.update(structured_meta)
@@ -243,7 +206,7 @@ def load_all_documents(data_path: Path):
             skipped.append((str(pdf_path), str(e)))
             print(f"    [PDF]  SKIP {pdf_path.name}: {e}")
 
-    # --- DOCX (per-file) ---
+    # --- DOCX ---
     docx_files = sorted(data_path.rglob("*.docx"))
     print(f"  Found {len(docx_files)} DOCX file(s)")
     for docx_path in docx_files:
@@ -262,7 +225,7 @@ def load_all_documents(data_path: Path):
             skipped.append((str(docx_path), str(e)))
             print(f"    [DOCX] SKIP {docx_path.name}: {e}")
 
-    # --- TXT (per-file) ---
+    # --- TXT ---
     txt_files = sorted(data_path.rglob("*.txt"))
     print(f"  Found {len(txt_files)} TXT file(s)")
     for txt_path in txt_files:
@@ -285,6 +248,26 @@ def load_all_documents(data_path: Path):
             skipped.append((str(txt_path), str(e)))
             print(f"    [TXT]  SKIP {txt_path.name}: {e}")
 
+    # === NEW: HTML Support ===
+    html_files = sorted(data_path.rglob("*.html")) + sorted(data_path.rglob("*.htm"))
+    print(f"  Found {len(html_files)} HTML file(s)")
+    for html_path in html_files:
+        if html_path.name in SKIP_PATTERNS:
+            continue
+        try:
+            # BSHTMLLoader extracts clean text from HTML (removes scripts, styles, etc.)
+            loader = BSHTMLLoader(str(html_path))
+            docs = loader.load()
+            structured_meta = _extract_structured_metadata(html_path, data_path)
+            for doc in docs:
+                doc.metadata["source"] = str(html_path)
+                doc.metadata.update(structured_meta)
+            all_docs.extend(docs)
+            print(f"    [HTML] {html_path.relative_to(data_path)}  ({len(docs)} doc(s))")
+        except Exception as e:
+            skipped.append((str(html_path), str(e)))
+            print(f"    [HTML] SKIP {html_path.name}: {e}")
+
     if skipped:
         print(f"\n  Warning: {len(skipped)} file(s) could not be loaded:")
         for path, err in skipped:
@@ -296,7 +279,7 @@ def load_all_documents(data_path: Path):
 def main():
     if not DATA_PATH.exists() or not any(DATA_PATH.iterdir()):
         print(f"Error: Folder '{DATA_PATH}' is empty or doesn't exist.")
-        print("→ Create it and add at least one .txt / .docx / .pdf file")
+        print("→ Create it and add at least one .txt / .docx / .pdf / .html file")
         return
 
     print(f"Loading documents from '{DATA_PATH}'...")
@@ -358,7 +341,7 @@ def main():
     print("\nLoading embedding model...")
     embeddings = HuggingFaceEmbeddings(
         model_name=model_name,
-        model_kwargs={"device": "cpu"},      # Change to "cuda" if GPU available
+        model_kwargs={"device": "cpu"},
         encode_kwargs={"normalize_embeddings": True},
     )
 
@@ -368,7 +351,7 @@ def main():
         embedding=embeddings,
     )
 
-    # Remove old index for this model before saving to avoid stale data
+    # Remove old index for this model before saving
     old_index = Path(index_path)
     if old_index.exists():
         shutil.rmtree(old_index)
@@ -377,7 +360,7 @@ def main():
     vectorstore.save_local(index_path)
     print(f"\nDone! FAISS index saved to: '{index_path}' ({len(chunks)} vectors)")
 
-    # Save image manifest alongside FAISS index
+    # Save image manifest
     if image_manifest:
         manifest_path = Path(index_path) / "image_manifest.json"
         manifest_path.parent.mkdir(parents=True, exist_ok=True)
