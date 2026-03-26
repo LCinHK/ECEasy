@@ -110,7 +110,7 @@ python ingest_FAISS.py
 ```
 
 This will:
-- Read all `.pdf`, `.docx`, `.txt` files from `./ECEknowledge/` (recursively)
+- Read all `.pdf`, `.docx` ,`.txt`, `html`  files from `./ECEknowledge/` (recursively)
 - Extract structured metadata: course codes, departments, document type
 - Build a FAISS vector index at `./faiss_index_all-MiniLM-L6-v2/` (or custom model folder)
 - Use the embedding model specified in `EMBEDDING_MODEL_HUB_NAME`

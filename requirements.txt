@@ -14,6 +14,7 @@ langchain-text-splitters
 torch
 pillow
 python-dotenv
+beautifulsoup4 # New dependency for web scraping(html)
 # --- RAG / Ingestion dependencies ---
 faiss-cpu
 pypdf
