@@ -47,6 +47,7 @@ export interface LlmRuntimeConfig {
   llmProvider?: 'openai' | 'deepseek';
   apiKey?: string;
   useServerKey?: boolean;
+  llmModel?: string;
 }
 
 const LLM_SPLIT = '__LLM_RESPONSE__';
@@ -89,6 +90,7 @@ export async function parseStreaming(
       llm_provider: llmConfig.llmProvider,
       api_key: llmConfig.apiKey,
       use_server_key: llmConfig.useServerKey,
+      llm_model: llmConfig.llmModel,
     }),
   });
 

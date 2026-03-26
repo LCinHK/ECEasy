@@ -14,6 +14,41 @@ from .config import (
 )
 from .schemas import QueryRequest
 
+OPENAI_ALLOWED_MODELS = {
+    "gpt-5.2",
+    "gpt-5.1",
+    "gpt-5",
+    "gpt-4o",
+    "gpt-4.1",
+    "gpt-4o-mini",
+    "gpt-3.5-turbo",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-5-mini",
+    "gpt-5-nano",
+}
+DEEPSEEK_ALLOWED_MODELS = {"deepseek-r1", "deepseek-v3", "deepseek-v3-2-exp"}
+DEFAULT_USER_MODEL_BY_PROVIDER = {
+    "openai": "gpt-5-mini",
+    "deepseek": "deepseek-v3",
+}
+
+
+def _resolve_remote_model_name(provider: str, request: QueryRequest, using_server_key: bool) -> str:
+    if using_server_key:
+        # Server-key mode is always controlled by backend env config.
+        return get_model_name_for_provider(provider)
+
+    requested_model = (request.llm_model or "").strip()
+    model_name = requested_model or DEFAULT_USER_MODEL_BY_PROVIDER.get(provider, "")
+
+    if provider == "openai" and model_name not in OPENAI_ALLOWED_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported OpenAI model selected.")
+    if provider == "deepseek" and model_name not in DEEPSEEK_ALLOWED_MODELS:
+        raise HTTPException(status_code=400, detail="Unsupported DeepSeek model selected.")
+
+    return model_name
+
 
 def resolve_runtime_llm_config(request: QueryRequest) -> tuple[openai.OpenAI, str, str, bool]:
     provider = (request.llm_provider or LLM_PROVIDER).lower()
@@ -56,5 +91,5 @@ def resolve_runtime_llm_config(request: QueryRequest) -> tuple[openai.OpenAI, st
             raise HTTPException(status_code=400, detail="DeepSeek API key is required for the selected mode.")
         client = openai.OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
 
-    return client, provider, get_model_name_for_provider(provider), using_server_key
-
+    model_name = _resolve_remote_model_name(provider, request, using_server_key)
+    return client, provider, model_name, using_server_key

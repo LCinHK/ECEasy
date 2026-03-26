@@ -17,13 +17,7 @@ interface SidebarProps {
 export function Sidebar({ onNewChat, currentChatId, onSelectChat, isOpen, setIsOpen }: SidebarProps) {
   // Mock chat history
   const chats: Chat[] = [
-    { id: '1', title: 'React best practices', timestamp: 'Today' },
-    { id: '2', title: 'AI model comparison', timestamp: 'Today' },
-    { id: '3', title: 'CSS grid layout help', timestamp: 'Yesterday' },
-    { id: '4', title: 'Python data structures', timestamp: 'Yesterday' },
-    { id: '5', title: 'Machine learning basics', timestamp: 'Feb 12' },
-    { id: '6', title: 'API design patterns', timestamp: 'Feb 11' },
-    { id: '7', title: 'Database optimization', timestamp: 'Feb 10' },
+    { id: '1', title: 'New Chat session', timestamp: 'Today' },
   ];
 
   return (

@@ -10,6 +10,25 @@ import type { Source, Relate, SuggestedImage } from './utils/parse-streaming';
 
 type UserLlmProvider = 'openai' | 'deepseek';
 
+const OPENAI_MODELS = [
+  'gpt-5.2',
+  'gpt-5.1',
+  'gpt-5',
+  'gpt-4o',
+  'gpt-4.1',
+  'gpt-4o-mini',
+  'gpt-3.5-turbo',
+  'gpt-4.1-mini',
+  'gpt-4.1-nano',
+  'gpt-5-mini',
+  'gpt-5-nano',
+] as const;
+
+const DEEPSEEK_MODELS = ['deepseek-r1', 'deepseek-v3', 'deepseek-v3-2-exp'] as const;
+
+const getModelsForProvider = (provider: UserLlmProvider): readonly string[] =>
+  provider === 'openai' ? OPENAI_MODELS : DEEPSEEK_MODELS;
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -33,10 +52,12 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showLlmModal, setShowLlmModal] = useState(true);
   const [selectedProvider, setSelectedProvider] = useState<UserLlmProvider>('openai');
+  const [selectedModel, setSelectedModel] = useState<string>('gpt-5-mini');
   const [userApiKey, setUserApiKey] = useState('');
   const [useServerKey, setUseServerKey] = useState(false);
   const [llmConfigured, setLlmConfigured] = useState(false);
   const [llmConfigError, setLlmConfigError] = useState('');
+  const [showApiKeyHint, setShowApiKeyHint] = useState(false);
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Keep a ref to the active AbortController so we can cancel if needed
@@ -74,6 +95,11 @@ export default function App() {
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    const models = getModelsForProvider(selectedProvider);
+    setSelectedModel((prev) => (models.includes(prev) ? prev : models[0]));
+  }, [selectedProvider]);
 
   const runStreamingQuery = async (content: string) => {
     if (!content.trim() || isLoading) return;
@@ -116,6 +142,7 @@ export default function App() {
           llmProvider: selectedProvider,
           apiKey: useServerKey ? undefined : userApiKey.trim(),
           useServerKey,
+          llmModel: useServerKey ? undefined : selectedModel,
         },
         // onSources — called once the sources JSON is received
         (sources) => {
@@ -297,7 +324,9 @@ export default function App() {
                     useServerKey ? 'bg-amber-200 text-amber-900' : 'bg-blue-100 text-blue-900'
                   }`}
                 >
-                  {useServerKey ? 'Using ECEasy key' : `Using your ${selectedProvider} key`}
+                  {useServerKey
+                    ? 'Using ECEasy key'
+                    : `Using your ${selectedProvider} key (${selectedModel})`}
                 </span>
               )}
               <button
@@ -382,7 +411,18 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Your API key</label>
+                <div className="mb-1 flex items-center gap-2">
+                  <label className="block text-sm font-medium text-gray-700">Your API key</label>
+                  <button
+                    type="button"
+                    onClick={() => setShowApiKeyHint((prev) => !prev)}
+                    className="text-xs px-1.5 py-0.5 rounded border border-amber-300 text-amber-800 hover:bg-amber-50"
+                    aria-label="What is an API key?"
+                    title="What is an API key?"
+                  >
+                    ?
+                  </button>
+                </div>
                 <input
                   type="password"
                   value={userApiKey}
@@ -390,13 +430,48 @@ export default function App() {
                   placeholder={selectedProvider === 'openai' ? 'sk-...' : 'sk-...'}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
                 />
+                {showApiKeyHint && (
+                  <p className="mt-2 text-xs text-gray-600">
+                    An API key is a private token that lets apps use an AI provider on your account.
+                    You can get a free compatible key from{' '}
+                    <a
+                      href="https://github.com/chatanywhere/GPT_API_free"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-600 underline hover:text-blue-800"
+                    >
+                      chatanywhere/GPT_API_free
+                    </a>
+                    .
+                  </p>
+                )}
                 <p className="mt-1 text-xs text-gray-500">
-                  Key is sent only with chat requests and is not stored in this UI.
+                  Key is sent only with chat requests and is not stored currently.
                 </p>
               </div>
 
+              {userApiKey.trim().length > 0 && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  >
+                    {getModelsForProvider(selectedProvider).map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-500">
+                    This selected model is used only when you choose "Use my key".
+                  </p>
+                </div>
+              )}
+
               <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900">
-                If you skip and use ECEasy&apos;s key, requests may incur our API costs and might be rate-limited.
+                If you skip and use ECEasy&apos;s key, requests may incur our API costs and might be rate-limited (May not be available at all times).
               </div>
 
               {llmConfigError && <p className="text-sm text-red-600">{llmConfigError}</p>}

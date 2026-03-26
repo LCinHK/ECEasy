@@ -10,6 +10,7 @@ class QueryRequest(BaseModel):
     llm_provider: Optional[str] = None
     api_key: Optional[str] = None
     use_server_key: Optional[bool] = None
+    llm_model: Optional[str] = None
 
 
 class ImageSuggestion(BaseModel):
@@ -25,4 +26,3 @@ class ChatResponse(BaseModel):
     related_questions: Optional[List[str]] = None
     suggested_images: Optional[List[ImageSuggestion]] = None
     flowchart: Optional[str] = None
-
