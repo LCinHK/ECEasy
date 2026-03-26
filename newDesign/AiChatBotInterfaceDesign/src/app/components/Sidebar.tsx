@@ -1,24 +1,45 @@
-import { Plus, MessageSquare, Menu, X } from 'lucide-react';
+import { Plus, MessageSquare } from 'lucide-react';
 
 interface Chat {
   id: string;
   title: string;
-  timestamp: string;
+  updatedAt: number;
 }
 
 interface SidebarProps {
   onNewChat: () => void;
+  chats: Chat[];
   currentChatId: string;
   onSelectChat: (chatId: string) => void;
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
 }
 
-export function Sidebar({ onNewChat, currentChatId, onSelectChat, isOpen, setIsOpen }: SidebarProps) {
-  // Mock chat history
-  const chats: Chat[] = [
-    { id: '1', title: 'New Chat session', timestamp: 'Today' },
-  ];
+const formatChatTimestamp = (updatedAt: number): string => {
+  const date = new Date(updatedAt);
+  if (Number.isNaN(date.getTime())) return '';
+
+  const now = new Date();
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  if (isToday) return 'Today';
+
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const isYesterday =
+    date.getFullYear() === yesterday.getFullYear() &&
+    date.getMonth() === yesterday.getMonth() &&
+    date.getDate() === yesterday.getDate();
+
+  if (isYesterday) return 'Yesterday';
+
+  return date.toLocaleDateString();
+};
+
+export function Sidebar({ onNewChat, chats, currentChatId, onSelectChat, isOpen, setIsOpen }: SidebarProps) {
 
   return (
     <>
@@ -57,7 +78,7 @@ export function Sidebar({ onNewChat, currentChatId, onSelectChat, isOpen, setIsO
               <MessageSquare size={18} className="mt-0.5 flex-shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="truncate text-sm">{chat.title}</div>
-                <div className="text-xs text-gray-400 mt-0.5">{chat.timestamp}</div>
+                <div className="text-xs text-gray-400 mt-0.5">{formatChatTimestamp(chat.updatedAt)}</div>
               </div>
             </button>
           ))}
@@ -70,8 +91,7 @@ export function Sidebar({ onNewChat, currentChatId, onSelectChat, isOpen, setIsO
               U
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm truncate text-gray-900">User Account</div>
-              <div className="text-xs text-gray-500">Free Plan</div>
+              <div className="text-sm truncate text-gray-900">Demo Account</div>
             </div>
           </div>
         </div>

@@ -39,15 +39,128 @@ interface Message {
   isStreaming?: boolean;
 }
 
+interface ChatThread {
+  id: string;
+  title: string;
+  updatedAt: number;
+}
+
+interface ChatState {
+  threads: ChatThread[];
+  messagesById: Record<string, Message[]>;
+  currentChatId: string;
+}
+
+const CHAT_STATE_STORAGE_KEY = 'eceasy_chat_state_v1';
+
+const createGreetingMessage = (): Message => ({
+  id: nanoid(),
+  role: 'assistant',
+  content: "Hello! I'm ECEasy, your HKUST ECE assistant. How can I help you today?",
+});
+
+const getChatTitle = (messages: Message[]): string => {
+  const firstUser = messages.find((m) => m.role === 'user' && m.content.trim().length > 0);
+  if (!firstUser) return 'New Chat session';
+  const normalized = firstUser.content.replace(/\s+/g, ' ').trim();
+  return normalized.length > 48 ? `${normalized.slice(0, 48)}...` : normalized;
+};
+
+const createThread = (id: string, messages: Message[], updatedAt = Date.now()): ChatThread => ({
+  id,
+  title: getChatTitle(messages),
+  updatedAt,
+});
+
+const createDefaultChatState = (): ChatState => {
+  const id = nanoid();
+  const starter = [createGreetingMessage()];
+  return {
+    threads: [createThread(id, starter)],
+    messagesById: { [id]: starter },
+    currentChatId: id,
+  };
+};
+
+const loadInitialChatState = (): ChatState => {
+  if (typeof window === 'undefined') return createDefaultChatState();
+
+  try {
+    const raw = window.localStorage.getItem(CHAT_STATE_STORAGE_KEY);
+    if (!raw) return createDefaultChatState();
+
+    const parsed = JSON.parse(raw) as Omit<Partial<ChatState>, 'threads'> & {
+      threads?: Array<Partial<ChatThread>>;
+      messagesById?: Record<string, Message[]>;
+      currentChatId?: string;
+    };
+    const messagesById = parsed.messagesById && typeof parsed.messagesById === 'object'
+      ? parsed.messagesById
+      : {};
+
+    const rawThreads = Array.isArray(parsed.threads) ? parsed.threads : [];
+    let threads: ChatThread[] = rawThreads
+      .map((t) => {
+        if (!t || typeof t.id !== 'string' || !t.id.trim()) return null;
+        const id = t.id;
+        return {
+          id,
+          title: typeof t.title === 'string' && t.title.trim() ? t.title : getChatTitle(messagesById[id] ?? []),
+          updatedAt:
+            typeof t.updatedAt === 'number' && Number.isFinite(t.updatedAt)
+              ? t.updatedAt
+              : Date.now(),
+        };
+      })
+      .filter((t): t is ChatThread => t !== null);
+    if (threads.length === 0) {
+      const ids = Object.keys(messagesById);
+      if (ids.length > 0) {
+        threads = ids.map((id) => createThread(id, messagesById[id] ?? []));
+      }
+    }
+
+    if (threads.length === 0) return createDefaultChatState();
+
+    const currentChatId =
+      parsed.currentChatId && threads.some((t) => t.id === parsed.currentChatId)
+        ? parsed.currentChatId
+        : threads[0].id;
+
+    const normalizedMessagesById = { ...messagesById };
+    for (const thread of threads) {
+      if (!Array.isArray(normalizedMessagesById[thread.id]) || normalizedMessagesById[thread.id].length === 0) {
+        normalizedMessagesById[thread.id] = [createGreetingMessage()];
+      }
+    }
+
+    return {
+      threads: threads.sort((a, b) => b.updatedAt - a.updatedAt),
+      messagesById: normalizedMessagesById,
+      currentChatId,
+    };
+  } catch {
+    return createDefaultChatState();
+  }
+};
+
+const syncThreadMeta = (threads: ChatThread[], chatId: string, messages: Message[]): ChatThread[] => {
+  const updatedAt = Date.now();
+  const title = getChatTitle(messages);
+  const existingIndex = threads.findIndex((t) => t.id === chatId);
+
+  let nextThreads: ChatThread[];
+  if (existingIndex >= 0) {
+    nextThreads = threads.map((t) => (t.id === chatId ? { ...t, title, updatedAt } : t));
+  } else {
+    nextThreads = [...threads, { id: chatId, title, updatedAt }];
+  }
+
+  return nextThreads.sort((a, b) => b.updatedAt - a.updatedAt);
+};
+
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      role: 'assistant',
-      content: "Hello! I'm ECEasy, your HKUST ECE assistant. How can I help you today?",
-    },
-  ]);
-  const [currentChatId, setCurrentChatId] = useState('1');
+  const [chatState, setChatState] = useState<ChatState>(() => loadInitialChatState());
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [showLlmModal, setShowLlmModal] = useState(true);
@@ -62,14 +175,39 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Keep a ref to the active AbortController so we can cancel if needed
   const abortRef = useRef<AbortController | null>(null);
+  const activeStreamChatIdRef = useRef<string | null>(null);
+
+  const { threads, currentChatId, messagesById } = chatState;
+  const messages = messagesById[currentChatId] ?? [];
+
+  const updateChatMessages = (chatId: string, updater: (prev: Message[]) => Message[]) => {
+    setChatState((prev) => {
+      const current = prev.messagesById[chatId] ?? [createGreetingMessage()];
+      const nextMessages = updater(current);
+      return {
+        ...prev,
+        threads: syncThreadMeta(prev.threads, chatId, nextMessages),
+        messagesById: {
+          ...prev.messagesById,
+          [chatId]: nextMessages,
+        },
+      };
+    });
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(CHAT_STATE_STORAGE_KEY, JSON.stringify(chatState));
+  }, [chatState]);
+
   // Mark the active streaming assistant reply as stopped.
   const stopActiveAssistantMessage = () => {
-    setMessages((prev) => {
+    const targetChatId = activeStreamChatIdRef.current ?? currentChatId;
+    updateChatMessages(targetChatId, (prev) => {
       let targetId: string | null = null;
       for (let i = prev.length - 1; i >= 0; i--) {
         if (prev[i].role === 'assistant' && prev[i].isStreaming) {
@@ -103,6 +241,8 @@ export default function App() {
 
   const runStreamingQuery = async (content: string) => {
     if (!content.trim() || isLoading) return;
+    const targetChatId = currentChatId;
+    activeStreamChatIdRef.current = targetChatId;
 
     // Cancel any in-flight request
     abortRef.current?.abort();
@@ -128,7 +268,7 @@ export default function App() {
       isStreaming: true,
     };
 
-    setMessages((prev) => [...prev, userMessage, assistantPlaceholder]);
+    updateChatMessages(targetChatId, (prev) => [...prev, userMessage, assistantPlaceholder]);
     setIsLoading(true);
 
     const searchUuid = nanoid();
@@ -146,20 +286,20 @@ export default function App() {
         },
         // onSources — called once the sources JSON is received
         (sources) => {
-          setMessages((prev) =>
+          updateChatMessages(targetChatId, (prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, sources } : m))
           );
         },
         // onMarkdown — called on every new chunk of LLM text
         (markdown) => {
-          setMessages((prev) =>
+          updateChatMessages(targetChatId, (prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: markdown } : m))
           );
           scrollToBottom();
         },
         // onRelates — called once the stream finishes
         (relates) => {
-          setMessages((prev) =>
+          updateChatMessages(targetChatId, (prev) =>
             prev.map((m) =>
               m.id === assistantId ? { ...m, relates, isStreaming: false } : m
             )
@@ -168,13 +308,13 @@ export default function App() {
         },
         // onSuggestedImages — called once the stream finishes
         (suggestedImages) => {
-          setMessages((prev) =>
+          updateChatMessages(targetChatId, (prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, suggestedImages } : m))
           );
         },
         // onError
         (status) => {
-          setMessages((prev) =>
+          updateChatMessages(targetChatId, (prev) =>
             prev.map((m) =>
               m.id === assistantId
                 ? {
@@ -196,7 +336,7 @@ export default function App() {
         stopActiveAssistantMessage();
         setIsLoading(false);
       } else {
-        setMessages((prev) =>
+        updateChatMessages(targetChatId, (prev) =>
           prev.map((m) =>
             m.id === assistantId
               ? { ...m, content: 'Sorry, something went wrong. Please try again.', isStreaming: false }
@@ -209,6 +349,7 @@ export default function App() {
       if (abortRef.current === controller) {
         abortRef.current = null;
       }
+      activeStreamChatIdRef.current = null;
     }
   };
 
@@ -260,20 +401,22 @@ export default function App() {
 
   const handleNewChat = () => {
     abortRef.current?.abort();
+    activeStreamChatIdRef.current = null;
     setIsLoading(false);
-    setMessages([
-      {
-        id: nanoid(),
-        role: 'assistant',
-        content: "Hello! I'm ECEasy, your HKUST ECE assistant. How can I help you today?",
+    const newChatId = nanoid();
+    const starter = [createGreetingMessage()];
+    setChatState((prev) => ({
+      currentChatId: newChatId,
+      messagesById: {
+        ...prev.messagesById,
+        [newChatId]: starter,
       },
-    ]);
-    setCurrentChatId(nanoid());
+      threads: syncThreadMeta(prev.threads, newChatId, starter),
+    }));
   };
 
   const handleSelectChat = (chatId: string) => {
-    setCurrentChatId(chatId);
-    // Sidebar history is a future feature — for now just acknowledge selection
+    setChatState((prev) => ({ ...prev, currentChatId: chatId }));
   };
 
   return (
@@ -281,6 +424,7 @@ export default function App() {
       {/* Sidebar */}
       <Sidebar
         onNewChat={handleNewChat}
+        chats={threads}
         currentChatId={currentChatId}
         onSelectChat={handleSelectChat}
         isOpen={isSidebarOpen}
