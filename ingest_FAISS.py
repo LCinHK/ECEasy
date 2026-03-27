@@ -104,11 +104,28 @@ def _extract_structured_metadata(file_path: Path, data_path: Path) -> dict:
 
 
 def _index_name_from_hub(hub_name: str) -> str:
+    """
+    Derives a filesystem-safe FAISS index folder name from a Hub model name.
+      "BAAI/bge-small-en-v1.5"  →  "faiss_index_bge-small-en-v1.5"
+      "all-MiniLM-L6-v2"        →  "faiss_index_all-MiniLM-L6-v2"
+    """
     short = hub_name.split("/")[-1]
     return f"faiss_index_{short}"
 
 
 def _resolve_embedding_model() -> tuple[str, str]:
+    """
+    Returns (model_name_or_path, faiss_index_path).
+
+    Model resolution priority:
+      1. If EMBEDDING_MODEL_LOCAL_PATH in .env points to an existing local directory
+         → use it directly (fully offline; sets TRANSFORMERS_OFFLINE=1).
+      2. Otherwise use EMBEDDING_MODEL_HUB_NAME as a Hub ID for auto-download/cache.
+
+    The FAISS index folder is always derived from EMBEDDING_MODEL_HUB_NAME so that
+    different models store their indexes in separate directories and never overwrite
+    each other. Must stay in sync with faiss_rag.py.
+    """
     hub_name = os.environ.get("EMBEDDING_MODEL_HUB_NAME", "all-MiniLM-L6-v2").strip()
     base_dir = Path(__file__).resolve().parent
     index_path = str(base_dir / _index_name_from_hub(hub_name))
@@ -122,6 +139,9 @@ def _resolve_embedding_model() -> tuple[str, str]:
             print(f"[Embedding] Using local model folder: '{resolved}' (offline)")
             print(f"[Embedding] FAISS index will be saved to: '{index_path}'")
             return resolved, index_path
+        else:
+            print(f"[Embedding] WARNING: EMBEDDING_MODEL_LOCAL_PATH '{local_path}' "
+                  f"(resolved: '{resolved}') not found — falling back to HuggingFace Hub.")
 
     print(f"[Embedding] Using HuggingFace Hub model: '{hub_name}' (requires internet on first run)")
     print(f"[Embedding] FAISS index will be saved to: '{index_path}'")
@@ -129,9 +149,19 @@ def _resolve_embedding_model() -> tuple[str, str]:
 
 
 def _extract_image_metadata(file_path: Path, data_path: Path) -> dict:
+    """
+    Extract metadata from image file name and path.
+    Example: "./ECEknowledge/course syllabus/common core courese/Common_Core_Course.png"
+    → { "source_relpath": "course syllabus/common core courese/Common_Core_Course.png",
+        "source_name": "Common_Core_Course.png",
+        "doc_type": "course_requirement",
+        "department": "common_core",
+        "course_code": "",
+        "description_from_filename": "Common Core Course" }
+    """
     rel_path = file_path.relative_to(data_path)
     rel_posix = str(rel_path).replace("\\", "/")
-
+    # Extract course code if present in filename or path
     course_code = _extract_course_code(file_path.stem)
     if not course_code:
         course_code = _extract_course_code(rel_posix)
@@ -145,8 +175,9 @@ def _extract_image_metadata(file_path: Path, data_path: Path) -> dict:
             if re.fullmatch(r"[A-Z]{4}", up):
                 dept = up
                 break
-
+    # Infer doc type from path
     doc_type = _detect_doc_type(rel_path)
+    # Extract human-readable description from filename (e.g., "Common_Core_Course.png" → "Common Core Course")
     stem_clean = file_path.stem.replace("_", " ").replace("-", " ")
 
     return {
@@ -162,6 +193,10 @@ def _extract_image_metadata(file_path: Path, data_path: Path) -> dict:
 
 
 def load_all_images(data_path: Path) -> list[dict]:
+    """
+    Scan for all image files (.png, .jpg, .jpeg) in data_path recursively.
+    Return list of image metadata dicts (not embedded, just cataloged).
+    """
     image_manifest = []
     image_files = sorted(data_path.rglob("*"))
     image_files = [f for f in image_files if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS]
