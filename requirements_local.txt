@@ -1,17 +1,25 @@
-uvicorn
-fastapi
-httpx
-loguru
-openai
-ddgs
-langchain-community==0.3.14
-langchain-chroma==0.2.0
-langchain-huggingface==0.1.2
-langchain-openai==0.3.1
-langchain-text-splitters
-python-dotenv
-# --- RAG / Ingestion dependencies ---
-faiss-cpu
-pypdf
-docx2txt
+# --- FastAPI & Web Server ---
+uvicorn==0.40.0                          # ASGI server for running FastAPI
+fastapi==0.128.0                         # Fast web framework for building APIs
+
+# --- HTTP & Utilities ---
+httpx==0.28.1                            # Modern HTTP client library
+loguru==0.7.3                            # Better logging with automatic rotation
+python-dotenv==1.2.1                     # Load environment variables from .env
+
+# --- LLM Provider Integration ---
+openai==1.109.1                          # OpenAI API client (GPT-4, GPT-5 models)
+ddgs==9.10.0                             # DuckDuckGo search (web fallback for RAG)
+
+# --- RAG & LangChain Stack ---
+langchain-community==0.3.14              # Community integrations for LangChain
+langchain-chroma==0.2.0                  # ChromaDB vector store adapter
+langchain-huggingface==0.1.2             # HuggingFace embeddings for LangChain
+langchain-openai==0.3.1                  # OpenAI integration for LangChain
+langchain-text-splitters==0.3.8          # Text chunking utilities for documents
+
+# --- Vector Database & Embeddings ---
+faiss-cpu==1.13.2                        # FAISS indexing for ECE knowledge base (CPU version)
+pypdf==6.7.5                             # PDF extraction and text parsing
+docx2txt==0.9                            # DOCX (Word document) text extraction
 

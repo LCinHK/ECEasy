@@ -1,6 +1,7 @@
 import json
 import shelve
 from typing import Callable, Generator, List, Optional
+from urllib.parse import quote
 
 import openai
 from loguru import logger
@@ -86,7 +87,7 @@ def stream_response(
             image_suggestions = image_suggester(query, llm_response_text, image_retriever)
             formatted_images = [
                 {
-                    "path": f"/ECEknowledge/{img['source_relpath']}",
+                    "path": _to_resource_url("ECEknowledge", img["source_relpath"]),
                     "description": img.get("description", ""),
                     "doc_type": img.get("doc_type", "general"),
                     "source_relpath": img["source_relpath"],
@@ -117,3 +118,6 @@ def stream_response(
         except Exception as e:
             logger.error(f"Cache write error: {e}")
 
+def _to_resource_url(root: str, relpath: str) -> str:
+    safe_rel = quote(relpath.replace("\\", "/").lstrip("/"), safe="/")
+    return f"/resource/{root}/{safe_rel}" if safe_rel else "#"

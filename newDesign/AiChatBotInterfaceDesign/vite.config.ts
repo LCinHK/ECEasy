@@ -25,6 +25,12 @@ export default defineConfig({
     // Output directly into ECEasy/newUI/ so the backend can serve it
     outDir: path.resolve(__dirname, '../../newUI'),
     emptyOutDir: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        chat: path.resolve(__dirname, 'chat.html'),
+      },
+    },
   },
 
   // File types to support raw imports. Never add .css, .tsx, or .ts files to this.

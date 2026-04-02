@@ -8,6 +8,7 @@ import os
 import re
 import logging
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -42,6 +43,28 @@ def _extract_course_code(text: str) -> str:
     if not m:
         return ""
     return f"{m.group(1).upper()}{m.group(2).upper()}"
+
+
+def _infer_source_relpath(file_path: str, metadata: dict) -> str:
+    """Best-effort relative path under ECEknowledge for old/new indexes."""
+    rel = str(metadata.get("source_relpath", "")).strip()
+    if rel:
+        rel = re.sub(r"\\+", "/", rel).lstrip("/")
+        if rel.lower().startswith("eceknowledge/"):
+            rel = rel.split("/", 1)[1] if "/" in rel else ""
+        return rel
+
+    normalized = re.sub(r"\\+", "/", str(file_path or "")).strip()
+    if not normalized:
+        return ""
+
+    lower_norm = normalized.lower()
+    marker = "eceknowledge/"
+    idx = lower_norm.find(marker)
+    if idx >= 0:
+        return normalized[idx + len(marker):].lstrip("/")
+
+    return os.path.basename(normalized)
 
 
 # ======== Embedding model + index path resolution ========
@@ -183,6 +206,9 @@ def get_rag_context(query: str):
         # LangChain PDF loaders store the source path in 'source'
         file_path = metadata.get("source", metadata.get("file_path", ""))
 
+        source_relpath = _infer_source_relpath(file_path, metadata)
+        encoded_relpath = quote(source_relpath, safe="/") if source_relpath else ""
+
         if "page" in metadata:
             # page is 0-indexed in LangChain loaders
             page_num = int(metadata["page"]) + 1
@@ -199,13 +225,15 @@ def get_rag_context(query: str):
         if doc_type:
             name = f"{name} ({doc_type})"
 
-        # Normalise path separators and strip leading ../
-        clean_url_path = re.sub(r"\.\.", "", re.sub(r"\\+", "/", file_path))
+        resource_url = f"/resource/ECEknowledge/{encoded_relpath}{url_suffix}" if encoded_relpath else "#"
+        direct_url = f"/ECEknowledge/{encoded_relpath}{url_suffix}" if encoded_relpath else "#"
 
         context.append({
             "name": name,
             "snippet": doc.page_content,
-            "url": clean_url_path + url_suffix,
+            "url": resource_url,
+            "direct_url": direct_url,
+            "source_relpath": source_relpath,
         })
 
     # De-duplicate by snippet content

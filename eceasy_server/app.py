@@ -2,11 +2,13 @@ import logging
 import os
 import shelve
 from contextlib import asynccontextmanager
+from pathlib import Path
+from urllib.parse import unquote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from loguru import logger
 
@@ -108,6 +110,48 @@ def create_app() -> FastAPI:
     @app.get("/frontpage/")
     def frontpage_redirect_slash():
         return RedirectResponse("/frontpage/index.html")
+
+    PROJECT_ROOT = Path(__file__).resolve().parent.parent
+    RESOURCE_ROOTS = [
+        (PROJECT_ROOT / "ECEknowledge").resolve(),
+        (PROJECT_ROOT / "localData").resolve(),
+    ]
+
+    def _is_allowed_resource(path: Path) -> bool:
+        for root in RESOURCE_ROOTS:
+            if not root.exists():
+                continue
+            try:
+                path.relative_to(root)
+                return True
+            except ValueError:
+                continue
+        return False
+
+    def _resolve_resource_path(resource_path: str) -> Path:
+        decoded = unquote(resource_path).replace("\\", "/").lstrip("/")
+        if not decoded:
+            raise HTTPException(status_code=400, detail="Invalid resource path")
+
+        # Block absolute paths and traversal segments.
+        parts = [p for p in decoded.split("/") if p not in ("", ".")]
+        if any(p == ".." for p in parts):
+            raise HTTPException(status_code=400, detail="Invalid resource path")
+        if parts and ":" in parts[0]:
+            raise HTTPException(status_code=400, detail="Invalid resource path")
+
+        candidate = (PROJECT_ROOT / Path(*parts)).resolve()
+        if not _is_allowed_resource(candidate):
+            raise HTTPException(status_code=403, detail="Resource path is not allowed")
+        if not candidate.exists() or not candidate.is_file():
+            raise HTTPException(status_code=404, detail="Resource not found")
+
+        return candidate
+
+    @app.get("/resource/{resource_path:path}")
+    def get_resource(resource_path: str):
+        safe_file = _resolve_resource_path(resource_path)
+        return FileResponse(path=str(safe_file))
 
     if os.path.exists("ui"):
         app.mount("/ui", StaticFiles(directory="ui"), name="ui")

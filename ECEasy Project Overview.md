@@ -5,85 +5,299 @@ ECEasy is a **RAG-powered chatbot** designed for HKUST ECE (Electronic & Compute
 
 ---
 
-## Architecture
+## Architecture Overview
 
-### Backend (`eceasy_local_server.py`)
-- Built with **FastAPI**, served at `http://localhost:8000`
-- Supports three LLM providers (configured via `.env`):
-  - **Ollama** (local, default — currently `qwen3:4b`)
-  - **OpenAI** (e.g. `gpt-4o`)
-  - **DeepSeek** (e.g. `deepseek-chat`)
-- Query pipeline per request:
-  1. **RAG retrieval** via `arag/arag.py` → ChromaDB (Chroma vector store)
-  2. **Web search fallback** via DuckDuckGo (`ddgs`) if RAG yields < 8 results
-  3. **LLM streaming response** with citations
-  4. **Related questions generation** (second LLM call)
-  5. Results cached to a `shelve` KV store (`.kv` files)
-- Streaming protocol: `[contexts JSON]\n\n__LLM_RESPONSE__\n\n[LLM text]\n\n__RELATED_QUESTIONS__\n\n[questions JSON]`
+### Backend Stack
+- **Framework**: FastAPI (ASGI server via Uvicorn) → `http://localhost:8000`
+- **Request Handling**: Pydantic for schema validation
+- **Logging**: Loguru for structured logging with rotation
+- **Environment**: Python 3.10.11, managed via `.env` configuration
 
-### RAG (`arag/arag.py`)
-- Uses **ChromaDB** as the vector store (`./arag/chromaVectorStore/`)
-- Embedding model: `sentence-transformers/all-mpnet-base-v2` (HuggingFace, cached in `./arag/modelCache/`)
-- Collection name: `"nettyRAG"` ⚠️ — **this is the old Netty/computer-networks collection, NOT ECE content**
-- Cosine distance threshold (`MAGIC_NUMBER = 1.0`) — documents with score ≥ 1.0 are filtered out
+### LLM Providers (switchable via `.env`)
+The backend supports three LLM providers:
 
-### Ingestion Scripts
-| Script | Target Vector Store | Purpose |
-|---|---|---|
-| `ingest_local_data.py` | ChromaDB (`./arag/chromaVectorStore/`, collection `nettyRAG`) | Ingest from `./localData/` (PDFs & TXTs) |
-| `ingest_university.py` | **FAISS** (`./faiss_index_university/`) | Ingest from `./knowledge/university_life/` (old path, unused) |
+| Provider | Default Model | Use Case |
+|----------|---------------|----------|
+| **Ollama** | `qwen3:4b` | Local, no API key needed, faster on weak hardware |
+| **OpenAI** | `gpt-4o` / `gpt-5-mini` | Remote, powerful, requires API key |
+| **DeepSeek** | `deepseek-v3` | Remote alternative, competitive pricing |
 
-> ⚠️ **`ingest_university.py` uses FAISS** but the server never reads from the FAISS index — it only reads from ChromaDB.
+Users can select at runtime via the UI (`use_server_key=true` uses backend credentials from `.env`).
 
-### Knowledge Base (`ECEknowledge/`)
-Rich collection of ECE-relevant documents ready to be ingested:
-- **PDFs**: BEng ECE program overview, BEng MEIC overview, HKUST Common Core Program
-- **Course syllabi**: ELEC (34 courses), COMP (22 courses), MATH (19 courses), PHYS (2 courses)
-- **Program requirements**: `25-26elec.pdf`, `25-26meic.pdf`, `minor-robo.pdf`
-- **FAQ**: `FAQs.docx`
+### Request Pipeline
 
-> ⚠️ None of this has been ingested yet — the current ChromaDB contains computer networking data from the old Netty project.
+For each query:
+1. **RAG Context Retrieval** (`faiss_rag.py` or `arag/arag.py`)
+   - Retrieves up to 40 candidate chunks from vector store
+   - Filters by similarity threshold (FAISS: `MAGIC_NUMBER = 1.5`)
+   - Returns top 8 most relevant chunks with metadata
+   
+2. **Web Search Fallback** (`search_with_duckduckgo()`)
+   - If RAG returns < 8 results, queries DuckDuckGo via `ddgs` package
+   - Supplements with real-time web results
+   
+3. **LLM Streaming Response**
+   - Sends contexts + query to LLM with citation instructions
+   - Streams response chunks as they arrive
+   - Stops on configured stop words (e.g., `<|im_end|>`)
+   
+4. **Related Questions Generation** (optional)
+   - Second LLM call to generate 3 follow-up questions
+   - Disabled if `RELATED_QUESTIONS=false` in `.env`
+   
+5. **Image Suggestions** (if available)
+   - Queries image manifest from FAISS index
+   - Suggests relevant images based on query/response topics
+   
+6. **Response Caching**
+   - Full response cached to `shelve` KV store (`.kv` files)
+   - Allows users to retrieve past searches by UUID
 
-### Frontend
-Two UIs exist:
-1. **`web/`** — Full Next.js/React/TypeScript frontend (with Tailwind CSS, Mermaid diagrams, KaTeX math rendering, syntax highlighting, citation popovers). Built output served from `ui/` by FastAPI.
-2. **`ui/`** — Pre-built static output (HTML/JS) already served by FastAPI at `/ui/index.html`
-
-The UI streams responses and parses the three-part protocol, rendering:
-- **Sources panel** (with favicons, URLs, page numbers)
-- **Markdown answer** (with inline citation badges, Mermaid diagrams, math)
-- **Related questions** panel
-
-### Prompts (`ecEasyPrompts.py`)
-- `_rag_query_text`: System prompt that instructs the LLM to answer using `[[citation:x]]` references and optionally generate a Mermaid diagram
-- `_more_questions_prompt`: Prompt for generating 3 related follow-up questions
+### Response Format (Streaming Protocol)
+```
+[JSON contexts]\n\n__LLM_RESPONSE__\n\n[LLM streaming text]\n\n__RELATED_QUESTIONS__\n\n[JSON questions][\n\n__SUGGESTED_IMAGES__\n\n[JSON images]]
+```
 
 ---
 
-## Current State & Key Gaps
+## Knowledge Base & RAG System
 
-| Issue | Detail |
-|---|---|
-| ❌ Wrong RAG database | `arag/chromaVectorStore/` contains computer networking content (old Netty project), not ECE content |
-| ❌ ECEknowledge not ingested | All the PDFs/DOCX in `ECEknowledge/` need to be ingested into a new vector store |
-| ⚠️ Collection name mismatch | Still named `"nettyRAG"` — should be updated for ECEasy |
-| ⚠️ `ingest_university.py` misaligned | Uses FAISS and wrong data path; server never reads from it |
-| ⚠️ Preset queries are old | `page.tsx` still has computer networking sample questions |
-| ⚠️ `localData/` is empty | Currently empty; the legacy data is in `legacy/localData/` |
+### Two Knowledge Base Options (via `KNOWLEDGE=` in `.env`)
+
+#### 1. **FAISS** (Primary - ECE Content) ⭐ Recommended
+- **Location**: `./faiss_index_<model_name>/`
+- **Embedding Model**: Configurable (default: `BAAI/bge-small-en-v1.5`)
+- **Source Data**: `ECEknowledge/` folder
+- **Includes**: Course syllabi, program requirements, FAQs, images
+- **Ingestion**: `ingest_FAISS.py`
+- **Similarity Metric**: L2 distance (lower = more similar)
+- **Threshold**: Chunks with distance ≥ 1.5 filtered out
+- **Features**: 
+  - Course code extraction & metadata enrichment
+  - Image catalog with document type classification
+  - Supports PDF, DOCX, TXT, HTML, images
+
+#### 2. **ChromaDB** (Legacy - Networking Content)
+- **Location**: `./arag/chromaVectorStore/`
+- **Embedding Model**: `sentence-transformers/all-mpnet-base-v2`
+- **Collection**: `"nettyRAG"` (legacy name from Netty project)
+- **Source Data**: Computer networking documents (old Netty project)
+- **Ingestion**: `ingest_Chroma.py` (reads from `localData/`)
+- **Similarity Metric**: Cosine distance
+- **Threshold**: Documents with score ≥ 1.0 filtered out
+
+**Status**: ⚠️ ChromaDB still contains old Netty content; FAISS is the active ECE knowledge base.
+
+### Embedding Model Management
+- **HuggingFace Transformers**: Models auto-downloaded from Hub on first run
+- **Caching**: Stored in `./arag/modelCache/` (ChromaDB) or `./models/` (FAISS local path)
+- **GPU Support**: Auto-detected; uses CUDA if available, falls back to CPU
+- **Offline Mode**: Set `EMBEDDING_MODEL_LOCAL_PATH` in `.env` to use pre-downloaded model
+
+### Knowledge Base Contents (`ECEknowledge/`)
+Rich collection ready for ingestion:
+- **Program Overviews**: BEng ECE, BEng MEIC, Common Core
+- **Course Syllabi**: 
+  - ELEC: 34 courses
+  - COMP: 22 courses
+  - MATH: 19 courses
+  - PHYS: 2 courses
+- **Program Requirements**: `25-26elec.pdf`, `25-26meic.pdf`, `minor-robo.pdf`
+- **FAQ**: `FAQs.docx`
+- **Images**: Diagrams, screenshots (cataloged in image manifest)
+
+---
+
+## Frontend
+
+### Two UI Options (via `UI_VERSION=` in `.env`)
+
+#### 1. **newUI** (React/Vite) ⭐ Modern
+- **Location**: `./newUI/`
+- **Tech**: React, Vite, Tailwind CSS
+- **Features**: 
+  - Streaming response display
+  - Citation badges with popovers
+  - Mermaid diagram rendering
+  - KaTeX math rendering
+  - Syntax highlighting for code blocks
+  - Related questions sidebar
+  - Image suggestions panel
+- **Status**: Active development
+
+#### 2. **oldUI** (Next.js) - Legacy
+- **Location**: `./web/` (source), `./ui/` (pre-built output)
+- **Tech**: Next.js, React, TypeScript, Tailwind CSS
+- **Status**: Serves as fallback, still functional
+
+Both UIs parse the three-part streaming protocol and render:
+- **Sources Panel**: Links with favicons, URLs, page numbers
+- **Main Response**: Markdown with inline citations
+- **Related Questions**: Clickable follow-up suggestions
+- **Images**: Suggested relevant images from knowledge base
 
 ---
 
 ## Configuration (`.env`)
-Provider selection and API keys are set via `.env` (gitignored). An `.env.example` exists for reference.
+
+Key environment variables:
+
+```env
+# Knowledge Base
+KNOWLEDGE="faiss"                           # "faiss" or "chroma"
+EMBEDDING_MODEL_HUB_NAME="BAAI/bge-small-en-v1.5"
+EMBEDDING_MODEL_LOCAL_PATH="./models/bge-small-en-v1.5"  # Optional: offline mode
+
+# UI
+UI_VERSION="newUI"                          # "newUI" or "oldUI"
+
+# Server
+HOST="0.0.0.0"
+PORT=8000
+KV_NAME="eceasy-chat-local.kv"
+
+# LLM Provider (backend fallback)
+LLM_PROVIDER="openai"                       # "ollama", "openai", or "deepseek"
+
+# LLM Model Selection
+OLLAMA_BASE_URL="http://localhost:11434/v1"
+OLLAMA_MODEL="qwen3:4b"
+OPENAI_API_KEY="sk-..."
+OPENAI_MODEL="gpt-5-mini"
+DEEPSEEK_API_KEY="sk-..."
+DEEPSEEK_MODEL="deepseek-v3"
+
+# Features
+RELATED_QUESTIONS="true"                    # Generate follow-up questions
+```
+
+See `.env.example` for full reference.
+
+---
+
+## Code Structure
+
+### Key Modules
+
+| Module | Purpose |
+|--------|---------|
+| `eceasy_server/app.py` | FastAPI application setup, CORS, static file serving |
+| `eceasy_server/config.py` | Environment loading, configuration constants |
+| `eceasy_server/schemas.py` | Pydantic models for request/response validation |
+| `eceasy_server/llm.py` | LLM provider resolution, model selection logic |
+| `eceasy_server/retrieval.py` | RAG context retrieval, DuckDuckGo search, related questions |
+| `eceasy_server/streaming.py` | Response streaming, caching, image suggestion orchestration |
+| `faiss_rag.py` | FAISS vector store querying, similarity reranking |
+| `arag/arag.py` | ChromaDB vector store interface (legacy) |
+| `image_retrieval.py` | Image manifest loading, search by course code/dept/keywords |
+| `ingest_FAISS.py` | Build FAISS index from `ECEknowledge/`, extract metadata, catalog images |
+| `ingest_Chroma.py` | Build ChromaDB from `localData/` (legacy) |
+| `ecEasyPrompts.py` | System prompts for RAG answering and related question generation |
+
+### Frontend
+
+| Folder | Purpose |
+|--------|---------|
+| `web/src/` | React/Vite source (Next.js-style layout, `page.tsx`) |
+| `ui/` | Pre-built static output served by FastAPI |
+| `public/` | Static assets (favicons, images) |
+
+---
+
+## Dependencies Overview
+
+### Core Dependencies (Python 3.10.11)
+
+**Web Framework**
+- `fastapi==0.128.0` - Fast web framework
+- `uvicorn==0.40.0` - ASGI server
+- `pydantic==2.12.5` - Request validation via type hints
+
+**LLM Integration**
+- `openai==1.109.1` - OpenAI API client
+- `ddgs==9.10.0` - DuckDuckGo search (web fallback)
+
+**RAG & Vector Search**
+- `faiss-cpu==1.13.2` - Vector indexing (ECE knowledge)
+- `langchain-community==0.3.14` - Integration framework
+- `langchain-chroma==0.2.0` - ChromaDB adapter
+- `langchain-huggingface==0.1.2` - HuggingFace embeddings
+- `langchain-openai==0.3.1` - OpenAI LangChain integration
+- `langchain-text-splitters==0.3.8` - Document chunking
+- `sentence-transformers==5.2.0` - Pre-trained embeddings
+- `torch==2.10.0` - ML backend for embeddings (GPU-capable)
+
+**Document Processing**
+- `pypdf==6.7.5` - PDF text extraction
+- `docx2txt==0.9` - Word document parsing
+- `beautifulsoup4==4.14.3` - HTML parsing
+
+**Utilities**
+- `httpx==0.28.1` - Modern HTTP client
+- `python-dotenv==1.2.1` - Environment loading
+- `loguru==0.7.3` - Structured logging
+- `pillow==11.3.0` - Image processing
+
+**Special**
+- `hf-xet==1.3.2` - HuggingFace extensible embeddings toolkit (used for embedding model management)
+
+---
+
+## Current State & Known Issues
+
+| Status | Issue | Detail |
+|--------|-------|--------|
+| ✅ | FAISS Active | ECEasy now uses FAISS for ECE knowledge (primary) |
+| ✅ | Ingestion Ready | `ingest_FAISS.py` successfully builds indexes from ECEknowledge/ |
+| ✅ | Image Support | Image manifest generated and integrated into responses |
+| ⚠️ | ChromaDB Legacy | Old Netty content still in `arag/chromaVectorStore/` — kept for reference |
+| ⚠️ | UI Migration | Both `newUI` and `oldUI` functional; `newUI` recommended |
+| 🔧 | LLM Integration | Supports Ollama (local), OpenAI, DeepSeek (runtime switching) |
+| 📝 | Prompt Quality | System prompts tuned for ECE student context |
 
 ---
 
 ## How to Run
-```
+
+### Quick Start
+```powershell
+# Windows batch file
 .\run_local_server.bat
-# or
-pip install -r requirements_local.txt
+
+# Or manual Python
+pip install -r requirements.txt
 python eceasy_local_server.py
 ```
-Server → `http://localhost:8000/ui/index.html`
+
+Access UI: `http://localhost:8000/ui/index.html` (newUI) or `http://localhost:8000/` (oldUI)
+
+### Ingest ECE Knowledge
+```powershell
+# Build FAISS index from ECEknowledge/
+python ingest_FAISS.py
+
+# (Legacy) Build ChromaDB from localData/
+python ingest_Chroma.py
+```
+
+### Development
+```powershell
+# Rebuild frontend (Next.js)
+cd web
+npm run build
+# Output goes to ./ui/
+
+# Or use Vite (newUI)
+npm run dev
+```
+
+---
+
+## Dependencies & Python Version
+
+**Python**: 3.10.11 (required for compatibility)  
+**Platform**: Windows (tested), Linux/macOS (should work)  
+**GPU**: Optional (torch auto-detects CUDA; falls back to CPU)
+
+All pinned versions in `requirements.txt` match the tested working environment.
 
