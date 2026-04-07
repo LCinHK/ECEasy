@@ -185,6 +185,50 @@ python query_debug.py --queries "ELEC1100" "COMP2011"
 
 See `./testing/README.md` for detailed documentation.
 
+### 7.1 Frontend stream parser debug pages (newUI)
+
+When running the Vite frontend, you can open parser debug modes directly:
+
+- `http://localhost:8000/newUI/chat.html?debugSample=1`
+- `http://localhost:8000/newUI/chat.html?debugFixture=1`
+
+Notes:
+- Use `chat.html?debug...` (no trailing slash before `?`).
+- `chat.html/?debug...` is treated as a different path and may not resolve in static hosting.
+- In `debugFixture`, you can paste a raw backend stream payload and click **Parse pasted payload**.
+
+### 7.2 How to get a raw backend stream response
+
+ECEasy backend streams this format:
+
+`[sources JSON] + __LLM_RESPONSE__ + [answer text] + __RELATED_QUESTIONS__ + [questions JSON] (+ __SUGGESTED_IMAGES__ + [images JSON])`
+
+You can obtain raw payloads in two ways:
+
+1. **Browser Network tab**
+   - Open DevTools → Network → `POST /query`
+   - Copy response body (or replay/copy as cURL)
+
+2. **Server cache (`shelve`) by `search_uuid`**
+   - Backend writes cached stream segments in `eceasy_server/streaming.py` (`db[search_uuid] = full_response_data`)
+   - Backend reuses cache in `eceasy_server/app.py` when the same `search_uuid` is requested
+   - Cache file is controlled by `.env` `KV_NAME` (default `eceasy-chat-local.kv`)
+
+Quick local inspection example:
+
+```python
+import shelve
+
+KV_NAME = "eceasy-chat-local.kv"
+with shelve.open(KV_NAME) as db:
+    print("keys:", list(db.keys())[:10])
+    # Replace with an existing UUID key
+    key = "YOUR_SEARCH_UUID"
+    if key in db:
+        raw = "".join(db[key])
+        print(raw)
+```
+
 ## 8. Features
 
 ### Supported LLM Providers
@@ -226,7 +270,7 @@ See `./testing/README.md` for detailed documentation.
 - Clear browser cache and hard refresh (Ctrl+Shift+R / Cmd+Shift+R)
 
 ### FAISS retrieval not working
-- Verify ingestion completed: `python ingest_university.py`
+- Verify ingestion completed: `python ingest_FAISS.py`
 - Check `./ECEknowledge/` contains documents (`.pdf`, `.docx`, `.txt`)
 - Confirm `KNOWLEDGE="faiss"` in `.env`
 - Test with: `cd testing && python query_debug.py`
@@ -240,7 +284,7 @@ See `./testing/README.md` for detailed documentation.
 ### File permission errors on Windows
 - Close all Python processes and the server
 - Delete any `faiss_index_*.__bak__` or `__tmp__` folders manually if they exist
-- Re-run ingestion: `python ingest_university.py`
+- Re-run ingestion: `python ingest_FAISS.py`
 
 ## 10. Architecture Notes
 

@@ -65,3 +65,4 @@ models/
 # Nested UI workspace dependencies
 /newDesign/AiChatBotInterfaceDesign/node_modules/
 /newDesign/FrontPage/.github/
+/ECEknowledge_old/**

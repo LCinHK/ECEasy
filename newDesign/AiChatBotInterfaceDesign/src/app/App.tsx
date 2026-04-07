@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
+import { DebugSamplePreview } from './components/DebugSamplePreview';
+import { DebugFixturePreview } from './components/DebugFixturePreview';
 import { MessageInput } from './components/MessageInput';
 import { Menu } from 'lucide-react';
 import logo from '../assets/icon.svg';
@@ -159,7 +161,7 @@ const syncThreadMeta = (threads: ChatThread[], chatId: string, messages: Message
   return nextThreads.sort((a, b) => b.updatedAt - a.updatedAt);
 };
 
-export default function App() {
+function MainApp() {
   const [chatState, setChatState] = useState<ChatState>(() => loadInitialChatState());
   const [isLoading, setIsLoading] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -651,5 +653,15 @@ export default function App() {
       )}
     </div>
   );
+}
+
+export default function App() {
+  const searchParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+  const isDebugSampleMode = !!searchParams?.has('debugSample');
+  const isDebugFixtureMode = !!searchParams?.has('debugFixture');
+
+  if (isDebugSampleMode) return <DebugSamplePreview />;
+  if (isDebugFixtureMode) return <DebugFixturePreview />;
+  return <MainApp />;
 }
 

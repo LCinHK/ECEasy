@@ -1,0 +1,38 @@
+# Runtime dependencies for deploying ECEasy backend only.
+# This file excludes ingestion-only packages to keep server footprint smaller.
+
+# --- FastAPI & Web Server ---
+uvicorn==0.40.0
+fastapi==0.128.0
+
+# --- HTTP, Config, Logging ---
+httpx==0.28.1
+loguru==0.7.3
+python-dotenv==1.2.1
+pydantic==2.12.5
+
+# --- LLM + Web Search ---
+openai==1.109.1
+ddgs==9.10.0
+
+# --- RAG Runtime Core ---
+langchain-community==0.3.14
+langchain-huggingface==0.1.2
+faiss-cpu==1.13.2
+sentence-transformers==5.2.0
+# Install CPU-only torch wheel to avoid large CUDA packages:
+# pip install --index-url https://download.pytorch.org/whl/cpu torch==2.10.0
+torch==2.10.0
+
+# --- Optional: legacy Chroma mode (KNOWLEDGE=chroma) ---
+# langchain-chroma==0.2.0
+
+# --- Not included on purpose (ingestion/build-only) ---
+# pypdf==6.7.5
+# docx2txt==0.9
+# beautifulsoup4==4.14.3
+# langchain-text-splitters==0.3.8
+# pillow==11.3.0
+# langchain-openai==0.3.1
+# hf-xet==1.3.2
+

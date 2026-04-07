@@ -136,6 +136,16 @@ Both UIs parse the three-part streaming protocol and render:
 - **Related Questions**: Clickable follow-up suggestions
 - **Images**: Suggested relevant images from knowledge base
 
+### Frontend Debug Modes (newUI)
+- `.../newUI/chat.html?debugSample=1` → static sample response rendering
+- `.../newUI/chat.html?debugFixture=1` → fixture/raw-stream parser test page
+- Use `chat.html?debug...` (without extra `/` before `?`) for static file hosting compatibility.
+
+### Raw Response Storage
+- Streaming payload is assembled in `eceasy_server/streaming.py` and cached by `search_uuid` into shelve (`KV_NAME`).
+- Cache is replayed in `eceasy_server/app.py` (`/query`) if the same UUID is requested.
+- This makes it easy to copy raw payloads for parser regression tests.
+
 ---
 
 ## Configuration (`.env`)

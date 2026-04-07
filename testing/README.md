@@ -104,6 +104,26 @@ python query_debug.py --queries "ELEC1100" "COMP1021" "What is prerequisite for 
 
 ---
 
+### 4. `dump_cached_stream.py`
+Dump raw cached backend stream payloads from the local shelve KV store.
+
+**What it shows:**
+- Available cached `search_uuid` keys
+- Full raw concatenated stream payload for a selected key
+
+**Usage:**
+```powershell
+python dump_cached_stream.py --list
+python dump_cached_stream.py --key <search_uuid>
+python dump_cached_stream.py --key <search_uuid> --out raw_stream.txt
+```
+
+**When to use:**
+- Capture real backend payloads for frontend parser regression tests
+- Compare live `/query` output against fixture files in `newUI` debug pages
+
+---
+
 ## Quick Start
 
 After ingesting ECEknowledge with `ingest_university.py`:

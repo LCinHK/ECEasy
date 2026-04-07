@@ -30,13 +30,14 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 
 # ======== Configuration ========
-DATA_PATH = Path("ECEknowledge")       # Source knowledge folder
+BASE_DIR = Path(__file__).resolve().parent
+DATA_PATH = BASE_DIR / "ECEknowledge"  # Source knowledge folder
 
 # Files / patterns to skip (e.g. macOS metadata files)
-SKIP_PATTERNS = {".DS_Store"}
+SKIP_PATTERNS = {".DS_Store", "Thumbs.db"}
 
 # Image file extensions to catalog
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 # Metadata enrichment controls
 PREPEND_METADATA_TO_CHUNK_TEXT = True
@@ -60,12 +61,51 @@ def _extract_course_code(text: str) -> str:
     return f"{m.group(1).upper()}{m.group(2).upper()}"
 
 
+def _should_skip_file(file_path: Path) -> bool:
+    name = file_path.name
+    return (
+        name in SKIP_PATTERNS
+        or name.startswith("~$")
+        or name.startswith(".")
+    )
+
+
+def _normalized_relpath_for_dedupe(file_path: Path, data_path: Path) -> str:
+    rel = str(file_path.relative_to(data_path)).replace("\\", "/").lower()
+    # Collapse common duplicate suffixes like " (1)", " (2)" before extension.
+    rel = re.sub(r"\s*\(\d+\)(?=\.[a-z0-9]+$)", "", rel)
+    return rel
+
+
+def _deduplicate_files(file_paths: list[Path], data_path: Path) -> list[Path]:
+    seen = set()
+    deduped = []
+    for path in sorted(file_paths):
+        key = _normalized_relpath_for_dedupe(path, data_path)
+        if key in seen:
+            print(f"    [SKIP] duplicate candidate: {path.relative_to(data_path)}")
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
 def _detect_doc_type(rel_path: Path) -> str:
     rel = str(rel_path).replace("\\", "/").lower()
-    if "course syllabus/" in rel:
+    if rel.startswith("course_syllabus/") or "course syllabus/" in rel:
         return "course_syllabus"
-    if "program requirement/" in rel:
+    if rel.startswith("program_requirements/") or "program requirement/" in rel:
         return "program_requirement"
+    if rel.startswith("academic_policies/"):
+        return "academic_policy"
+    if rel.startswith("student_guides/"):
+        return "student_guide"
+    if rel.startswith("ece_study_plans/"):
+        return "study_plan"
+    if rel.startswith("fyp_t_coop/"):
+        return "fyp_t_coop"
+    if rel.startswith("course_materials"):
+        return "course_material"
     if "faq" in rel:
         return "faq"
     if "common core" in rel:
@@ -93,10 +133,19 @@ def _extract_structured_metadata(file_path: Path, data_path: Path) -> dict:
                 dept = up
                 break
 
+    # Handle files like MATH/2011.pdf where course prefix is implied by folder.
+    if not course_code and dept:
+        stem_match = re.fullmatch(r"(\d{4}[A-Za-z]?)", file_path.stem.strip())
+        if stem_match:
+            course_code = f"{dept}{stem_match.group(1).upper()}"
+
+    section = rel_path.parts[0].lower() if rel_path.parts else ""
+
     return {
         "source_relpath": rel_posix,
         "source_name": file_path.name,
         "source_stem": file_path.stem,
+        "knowledge_section": section,
         "doc_type": _detect_doc_type(rel_path),
         "department": dept,
         "course_code": course_code,
@@ -127,12 +176,11 @@ def _resolve_embedding_model() -> tuple[str, str]:
     each other. Must stay in sync with faiss_rag.py.
     """
     hub_name = os.environ.get("EMBEDDING_MODEL_HUB_NAME", "all-MiniLM-L6-v2").strip()
-    base_dir = Path(__file__).resolve().parent
-    index_path = str(base_dir / _index_name_from_hub(hub_name))
+    index_path = str(BASE_DIR / _index_name_from_hub(hub_name))
 
     local_path = os.environ.get("EMBEDDING_MODEL_LOCAL_PATH", "").strip()
     if local_path:
-        resolved = os.path.normpath(os.path.join(str(base_dir), local_path))
+        resolved = os.path.normpath(os.path.join(str(BASE_DIR), local_path))
         if os.path.isdir(resolved):
             os.environ["TRANSFORMERS_OFFLINE"] = "1"
             os.environ["HF_DATASETS_OFFLINE"] = "1"
@@ -200,10 +248,11 @@ def load_all_images(data_path: Path) -> list[dict]:
     image_manifest = []
     image_files = sorted(data_path.rglob("*"))
     image_files = [f for f in image_files if f.is_file() and f.suffix.lower() in IMAGE_EXTENSIONS]
+    image_files = _deduplicate_files(image_files, data_path)
 
     print(f"  Found {len(image_files)} image file(s)")
     for img_path in image_files:
-        if img_path.name in SKIP_PATTERNS:
+        if _should_skip_file(img_path):
             continue
         try:
             metadata = _extract_image_metadata(img_path, data_path)
@@ -223,10 +272,10 @@ def load_all_documents(data_path: Path):
     skipped = []
 
     # --- PDFs ---
-    pdf_files = sorted(data_path.rglob("*.pdf"))
+    pdf_files = _deduplicate_files(list(data_path.rglob("*.pdf")), data_path)
     print(f"  Found {len(pdf_files)} PDF file(s)")
     for pdf_path in pdf_files:
-        if pdf_path.name in SKIP_PATTERNS:
+        if _should_skip_file(pdf_path):
             continue
         try:
             loader = PyPDFLoader(str(pdf_path))
@@ -242,10 +291,10 @@ def load_all_documents(data_path: Path):
             print(f"    [PDF]  SKIP {pdf_path.name}: {e}")
 
     # --- DOCX ---
-    docx_files = sorted(data_path.rglob("*.docx"))
+    docx_files = _deduplicate_files(list(data_path.rglob("*.docx")), data_path)
     print(f"  Found {len(docx_files)} DOCX file(s)")
     for docx_path in docx_files:
-        if docx_path.name in SKIP_PATTERNS:
+        if _should_skip_file(docx_path):
             continue
         try:
             loader = Docx2txtLoader(str(docx_path))
@@ -261,10 +310,10 @@ def load_all_documents(data_path: Path):
             print(f"    [DOCX] SKIP {docx_path.name}: {e}")
 
     # --- TXT ---
-    txt_files = sorted(data_path.rglob("*.txt"))
+    txt_files = _deduplicate_files(list(data_path.rglob("*.txt")), data_path)
     print(f"  Found {len(txt_files)} TXT file(s)")
     for txt_path in txt_files:
-        if txt_path.name in SKIP_PATTERNS:
+        if _should_skip_file(txt_path):
             continue
         try:
             try:
@@ -284,10 +333,13 @@ def load_all_documents(data_path: Path):
             print(f"    [TXT]  SKIP {txt_path.name}: {e}")
 
     # === NEW: HTML Support ===
-    html_files = sorted(data_path.rglob("*.html")) + sorted(data_path.rglob("*.htm"))
+    html_files = _deduplicate_files(
+        list(data_path.rglob("*.html")) + list(data_path.rglob("*.htm")),
+        data_path,
+    )
     print(f"  Found {len(html_files)} HTML file(s)")
     for html_path in html_files:
-        if html_path.name in SKIP_PATTERNS:
+        if _should_skip_file(html_path):
             continue
         try:
             # BSHTMLLoader extracts clean text from HTML (removes scripts, styles, etc.)
@@ -355,6 +407,7 @@ def main():
             dep = chunk.metadata.get("department", "")
             dt = chunk.metadata.get("doc_type", "")
             src = chunk.metadata.get("source_relpath", "")
+            sec = chunk.metadata.get("knowledge_section", "")
             if cc:
                 header_parts.append(f"COURSE_CODE={cc}")
             if dep:
@@ -363,6 +416,8 @@ def main():
                 header_parts.append(f"DOC_TYPE={dt}")
             if src:
                 header_parts.append(f"SOURCE={src}")
+            if sec:
+                header_parts.append(f"SECTION={sec}")
 
             if header_parts:
                 chunk.page_content = f"[META] {' | '.join(header_parts)}\n\n{chunk.page_content}"

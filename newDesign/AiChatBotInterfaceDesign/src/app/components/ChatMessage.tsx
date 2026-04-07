@@ -14,6 +14,7 @@ import {
   PopoverTrigger,
 } from '@/app/components/ui/popover';
 import { ImageWithFallback } from '@/app/components/figma/ImageWithFallback';
+import { normalizeAssistantContent } from '@/app/utils/assistant-content';
 import type { Source, Relate, SuggestedImage } from '@/app/utils/parse-streaming';
 
 interface ChatMessageProps {
@@ -198,6 +199,7 @@ export function ChatMessage({
 }: ChatMessageProps) {
   const isUser = role === 'user';
   const [expandedImage, setExpandedImage] = useState<SuggestedImage | null>(null);
+  const renderedContent = isUser ? content : normalizeAssistantContent(content);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -238,7 +240,7 @@ export function ChatMessage({
           ) : (
             <>
               {/* Assistant messages: rich Markdown with citations */}
-              <div className="prose prose-sm max-w-none">
+              <div className="prose prose-sm max-w-none prose-headings:text-slate-900 prose-p:text-gray-900 prose-li:text-gray-900">
                 <Markdown
                   remarkPlugins={[remarkGfm, remarkMath]}
                   rehypePlugins={[rehypeRaw, rehypeKatex]}
@@ -276,18 +278,7 @@ export function ChatMessage({
                     },
                   }}
                 >
-                  {/* Normalise LaTeX delimiters and chain-of-thought tags */}
-                  {content
-                    .replace(/\\\\\[/g, '$$')
-                    .replace(/\\\\]/g, '$$')
-                    .replace(/\\\\\(/g, '$$')
-                    .replace(/\\\\\)/g, '$$')
-                    .replace(/\\\[/g, '$$')
-                    .replace(/\\]/g, '$$')
-                    .replace(/\\\(/g, '$$')
-                    .replace(/\\\)/g, '$$')
-                    .replace(/<think>/g, '<details><summary>=== Chain of Thought ===</summary>')
-                    .replace(/<\/think>/g, '</details>')}
+                  {renderedContent}
                 </Markdown>
               </div>
 

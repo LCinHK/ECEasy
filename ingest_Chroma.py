@@ -22,7 +22,7 @@ except ImportError:
 import glob
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.document_loaders import PyPDFLoader, TextLoader, DirectoryLoader
+from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader, BSHTMLLoader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 # Configuration matching arag/arag.py
@@ -30,7 +30,11 @@ PATH_MODEL_CACHE = "./arag/modelCache"
 PATH_VECTOR_DB = "./arag/chromaVectorStore"
 EMBEDDING_MODEL = "sentence-transformers/all-mpnet-base-v2"
 COLLECTION_NAME = "nettyRAG"
-DATA_DIR = "./localData"
+DATA_DIR = os.environ.get("CHROMA_DATA_DIR", "./ECEknowledge")
+
+
+def _load_files(pattern: str):
+    return sorted(glob.glob(os.path.join(DATA_DIR, pattern), recursive=True))
 
 def ingest():
     print(f"Initializing embedding model: {EMBEDDING_MODEL}...")
@@ -47,14 +51,9 @@ def ingest():
     print(f"Loading documents from {DATA_DIR}...")
     documents = []
 
-    # 1. Load PDFs (Limited to speed up)
-    # We use glob to find all pdfs recursively
-    pdf_files = glob.glob(os.path.join(DATA_DIR, "**/*.pdf"), recursive=True)
+    # 1. Load PDFs
+    pdf_files = _load_files("**/*.pdf")
     print(f"Found {len(pdf_files)} PDF files.")
-
-    # Filter to prioritize Standards or limit count
-    # For now, let's limit to 5 PDFs to save time, unless user wants full ingestion later.
-    pdf_files = pdf_files[:5]
 
     for pdf_path in pdf_files:
         try:
@@ -65,8 +64,8 @@ def ingest():
         except Exception as e:
             print(f"Error loading {pdf_path}: {e}")
 
-    # 2. Load Text files (RFCs in Standards folder)
-    txt_files = glob.glob(os.path.join(DATA_DIR, "**/*.txt"), recursive=True)
+    # 2. Load TXT files
+    txt_files = _load_files("**/*.txt")
     print(f"Found {len(txt_files)} TXT files.")
 
     for txt_path in txt_files:
@@ -83,6 +82,28 @@ def ingest():
             documents.extend(docs)
         except Exception as e:
             print(f"Error loading {txt_path}: {e}")
+
+    # 3. Load DOCX files
+    docx_files = _load_files("**/*.docx")
+    print(f"Found {len(docx_files)} DOCX files.")
+    for docx_path in docx_files:
+        try:
+            loader = Docx2txtLoader(docx_path)
+            docs = loader.load()
+            documents.extend(docs)
+        except Exception as e:
+            print(f"Error loading {docx_path}: {e}")
+
+    # 4. Load HTML/HTM files
+    html_files = _load_files("**/*.html") + _load_files("**/*.htm")
+    print(f"Found {len(html_files)} HTML files.")
+    for html_path in html_files:
+        try:
+            loader = BSHTMLLoader(html_path)
+            docs = loader.load()
+            documents.extend(docs)
+        except Exception as e:
+            print(f"Error loading {html_path}: {e}")
 
     print(f"Total raw documents loaded: {len(documents)}")
 

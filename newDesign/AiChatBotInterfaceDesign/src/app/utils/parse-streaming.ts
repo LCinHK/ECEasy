@@ -50,6 +50,13 @@ export interface LlmRuntimeConfig {
   llmModel?: string;
 }
 
+export interface ParsedStreamPayload {
+  sources: Source[];
+  markdown: string;
+  relates: Relate[];
+  suggestedImages: SuggestedImage[];
+}
+
 const LLM_SPLIT = '__LLM_RESPONSE__';
 const RELATED_SPLIT = '__RELATED_QUESTIONS__';
 const IMAGES_SPLIT = '__SUGGESTED_IMAGES__';
@@ -64,6 +71,73 @@ export function markdownParse(text: string): string {
     .replace(/[cC]itation:(\d+)]]/g, 'citation:$1]')
     .replace(/\[\[([cC]itation:\d+)]](?!])/g, `[$1]`)
     .replace(/\[[cC]itation:(\d+)]/g, '[citation]($1)');
+}
+
+function safeJsonParse<T>(raw: string, fallback: T): T {
+  try {
+    return JSON.parse(raw.trim()) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeRawStreamPayload(raw: string): string {
+  const hasEscapedMarkers =
+    raw.includes(`\\n\\n${LLM_SPLIT}\\n\\n`) ||
+    raw.includes(`\\n\\n${RELATED_SPLIT}\\n\\n`) ||
+    raw.includes(`\\n\\n${IMAGES_SPLIT}\\n\\n`);
+
+  if (!hasEscapedMarkers) {
+    return raw;
+  }
+
+  return raw
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .replace(/\\t/g, '\t');
+}
+
+export function parseStreamPayload(raw: string): ParsedStreamPayload {
+  const normalizedRaw = normalizeRawStreamPayload(raw);
+  const llmIndex = normalizedRaw.indexOf(LLM_SPLIT);
+  if (llmIndex < 0) {
+    return {
+      sources: [],
+      markdown: markdownParse(normalizedRaw),
+      relates: [],
+      suggestedImages: [],
+    };
+  }
+
+  const sourcesPart = normalizedRaw.slice(0, llmIndex);
+  const llmPart = normalizedRaw.slice(llmIndex + LLM_SPLIT.length);
+
+  const relatedIndex = llmPart.lastIndexOf(RELATED_SPLIT);
+  const imagesIndex = llmPart.lastIndexOf(IMAGES_SPLIT);
+
+  const markdownEndCandidates = [relatedIndex, imagesIndex].filter((i) => i >= 0);
+  const markdownEnd = markdownEndCandidates.length > 0 ? Math.min(...markdownEndCandidates) : llmPart.length;
+  const markdown = markdownParse(llmPart.slice(0, markdownEnd));
+
+  let relates: Relate[] = [];
+  if (relatedIndex >= 0) {
+    const relatedStart = relatedIndex + RELATED_SPLIT.length;
+    const relatedEnd = imagesIndex >= 0 && imagesIndex > relatedIndex ? imagesIndex : llmPart.length;
+    relates = safeJsonParse<Relate[]>(llmPart.slice(relatedStart, relatedEnd), []);
+  }
+
+  let suggestedImages: SuggestedImage[] = [];
+  if (imagesIndex >= 0) {
+    const imagesStart = imagesIndex + IMAGES_SPLIT.length;
+    suggestedImages = safeJsonParse<SuggestedImage[]>(llmPart.slice(imagesStart), []);
+  }
+
+  return {
+    sources: safeJsonParse<Source[]>(sourcesPart, []),
+    markdown,
+    relates,
+    suggestedImages,
+  };
 }
 
 export async function parseStreaming(
@@ -143,30 +217,11 @@ export async function parseStreaming(
     if (done) break;
   }
 
-  // Parse related questions from the end of the accumulated stream
-  if (chunks.includes(RELATED_SPLIT)) {
-    const relatedStart = chunks.lastIndexOf(RELATED_SPLIT) + RELATED_SPLIT.length;
-    const imagesStart = chunks.indexOf(IMAGES_SPLIT, relatedStart);
-    const relatesJson =
-      imagesStart >= 0 ? chunks.slice(relatedStart, imagesStart) : chunks.slice(relatedStart);
-    try {
-      onRelates(JSON.parse(relatesJson.trim()));
-    } catch {
-      onRelates([]);
-    }
-  } else {
-    onRelates([]);
+  const finalParsed = parseStreamPayload(chunks);
+  if (!sourcesEmitted) {
+    onSources(finalParsed.sources);
   }
-
-  if (chunks.includes(IMAGES_SPLIT)) {
-    const imagesJson = chunks.slice(chunks.lastIndexOf(IMAGES_SPLIT) + IMAGES_SPLIT.length);
-    try {
-      onSuggestedImages(JSON.parse(imagesJson.trim()));
-    } catch {
-      onSuggestedImages([]);
-    }
-  } else {
-    onSuggestedImages([]);
-  }
+  onRelates(finalParsed.relates);
+  onSuggestedImages(finalParsed.suggestedImages);
 }
 
