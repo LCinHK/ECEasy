@@ -95,6 +95,21 @@ def create_app() -> FastAPI:
             media_type="text/plain",
         )
 
+    @app.delete("/api/chat/{chat_id}")
+    async def delete_chat(chat_id: str):
+        """Delete one cached chat stream from the local shelve storage."""
+        try:
+            with shelve.open(KV_NAME, writeback=True) as db:
+                if chat_id not in db:
+                    raise HTTPException(status_code=404, detail="Chat not found")
+                del db[chat_id]
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to delete chat: {e}")
+
+        return {"status": "success", "message": f"Chat {chat_id} deleted"}
+
     @app.get("/")
     def home():
         if UI_VERSION == "newui":

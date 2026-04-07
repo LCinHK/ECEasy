@@ -1,4 +1,4 @@
-import { Plus, MessageSquare } from 'lucide-react';
+import { Plus, MessageSquare, Trash2 } from 'lucide-react';
 
 interface Chat {
   id: string;
@@ -11,6 +11,7 @@ interface SidebarProps {
   chats: Chat[];
   currentChatId: string;
   onSelectChat: (chatId: string) => void;
+  onDeleteChat: (chatId: string) => void;
   isOpen: boolean;
   setIsOpen: (open: boolean) => void;
 }
@@ -39,7 +40,7 @@ const formatChatTimestamp = (updatedAt: number): string => {
   return date.toLocaleDateString();
 };
 
-export function Sidebar({ onNewChat, chats, currentChatId, onSelectChat, isOpen, setIsOpen }: SidebarProps) {
+export function Sidebar({ onNewChat, chats, currentChatId, onSelectChat, onDeleteChat, isOpen, setIsOpen }: SidebarProps) {
 
   return (
     <>
@@ -63,24 +64,36 @@ export function Sidebar({ onNewChat, chats, currentChatId, onSelectChat, isOpen,
         {/* Chat History */}
         <div className="flex-1 overflow-y-auto p-3 space-y-1">
           {chats.map((chat) => (
-            <button
+            <div
               key={chat.id}
-              onClick={() => {
-                onSelectChat(chat.id);
-                if (window.innerWidth < 1024) setIsOpen(false);
-              }}
-              className={`w-full flex items-start gap-3 px-3 py-3 rounded-lg transition-colors text-left ${
+              className={`group flex items-start gap-3 px-3 py-3 rounded-lg transition-colors cursor-pointer text-left ${
                 currentChatId === chat.id
                   ? 'bg-amber-100 text-gray-900'
                   : 'text-gray-600 hover:bg-amber-100/50 hover:text-gray-900'
               }`}
+              onClick={() => {
+                onSelectChat(chat.id);
+                if (window.innerWidth < 1024) setIsOpen(false);
+              }}
             >
               <MessageSquare size={18} className="mt-0.5 flex-shrink-0" />
               <div className="flex-1 min-w-0">
                 <div className="truncate text-sm">{chat.title}</div>
                 <div className="text-xs text-gray-400 mt-0.5">{formatChatTimestamp(chat.updatedAt)}</div>
               </div>
-            </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteChat(chat.id);
+                }}
+                className="p-1.5 text-gray-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-all rounded-lg hover:bg-red-100"
+                title="Delete chat"
+                aria-label={`Delete chat ${chat.title}`}
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
           ))}
         </div>
 

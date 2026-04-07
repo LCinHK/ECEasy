@@ -421,6 +421,47 @@ function MainApp() {
     setChatState((prev) => ({ ...prev, currentChatId: chatId }));
   };
 
+  const handleDeleteChat = async (chatId: string) => {
+    const chat = threads.find((t) => t.id === chatId);
+    const chatTitle = chat?.title ?? 'Untitled Chat';
+    if (!window.confirm(`Delete chat "${chatTitle}" permanently? This cannot be undone.`)) {
+      return;
+    }
+
+    if (chatId === currentChatId && isLoading) {
+      abortRef.current?.abort();
+      activeStreamChatIdRef.current = null;
+      setIsLoading(false);
+    }
+
+    // Best effort cleanup in backend cache/shelve; local UI state is source of truth.
+    try {
+      await fetch(`/api/chat/${encodeURIComponent(chatId)}`, { method: 'DELETE' });
+    } catch {
+      // Ignore network/backend delete failures and still remove local chat.
+    }
+
+    setChatState((prev) => {
+      const nextMessagesById = { ...prev.messagesById };
+      delete nextMessagesById[chatId];
+
+      const nextThreads = prev.threads.filter((t) => t.id !== chatId);
+      if (nextThreads.length === 0) {
+        return createDefaultChatState();
+      }
+
+      const nextCurrentChatId =
+        prev.currentChatId === chatId ? nextThreads[0].id : prev.currentChatId;
+
+      return {
+        ...prev,
+        threads: nextThreads,
+        messagesById: nextMessagesById,
+        currentChatId: nextCurrentChatId,
+      };
+    });
+  };
+
   return (
     <div className="flex h-screen bg-amber-50 text-gray-900 overflow-hidden">
       {/* Sidebar */}
@@ -429,6 +470,7 @@ function MainApp() {
         chats={threads}
         currentChatId={currentChatId}
         onSelectChat={handleSelectChat}
+        onDeleteChat={handleDeleteChat}
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
       />
