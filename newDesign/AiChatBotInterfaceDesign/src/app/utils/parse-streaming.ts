@@ -43,11 +43,18 @@ export interface SuggestedImage {
   source_relpath: string;
 }
 
+export interface ConversationHistoryTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
 export interface LlmRuntimeConfig {
   llmProvider?: 'openai' | 'deepseek';
   apiKey?: string;
   useServerKey?: boolean;
   llmModel?: string;
+  conversationHistory?: ConversationHistoryTurn[];
+  memoryTurns?: number;
 }
 
 export interface ParsedStreamPayload {
@@ -165,6 +172,8 @@ export async function parseStreaming(
       api_key: llmConfig.apiKey,
       use_server_key: llmConfig.useServerKey,
       llm_model: llmConfig.llmModel,
+      conversation_history: llmConfig.conversationHistory ?? [],
+      memory_turns: llmConfig.memoryTurns,
     }),
   });
 
@@ -224,4 +233,3 @@ export async function parseStreaming(
   onRelates(finalParsed.relates);
   onSuggestedImages(finalParsed.suggestedImages);
 }
-

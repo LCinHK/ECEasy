@@ -89,6 +89,12 @@ def create_app() -> FastAPI:
                 bool(request.generate_related_questions),
                 client,
                 model_name,
+                conversation_history=[
+                    turn.model_dump() if hasattr(turn, "model_dump") else turn.dict()
+                    for turn in request.conversation_history
+                ],
+                memory_turns=request.memory_turns,
+                using_server_key=bool(using_server_key),
                 image_retriever=app.state.image_retriever,
                 image_suggester=suggest_images_for_response,
             ),

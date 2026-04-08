@@ -10,6 +10,31 @@ import ecEasyPrompts
 from .config import KV_NAME, REFERENCE_COUNT, SHOULD_DO_RELATED_QUESTIONS, STOP_WORDS
 from .retrieval import get_rag_context, get_related_questions, search_with_duckduckgo
 
+SERVER_FIXED_MEMORY_TURNS = 3
+MAX_MEMORY_TURNS = 15
+
+
+def _clamp_memory_turns(memory_turns: int, using_server_key: bool) -> int:
+    if using_server_key:
+        return SERVER_FIXED_MEMORY_TURNS
+    return max(0, min(MAX_MEMORY_TURNS, int(memory_turns)))
+
+
+def _build_windowed_history(conversation_history: List[dict], memory_turns: int) -> List[dict]:
+    if memory_turns <= 0:
+        return []
+
+    cleaned: List[dict] = []
+    for turn in conversation_history:
+        role = str(turn.get("role", "")).strip()
+        content = str(turn.get("content", "")).strip()
+        if role not in ("user", "assistant") or not content:
+            continue
+        cleaned.append({"role": role, "content": content[:4000]})
+
+    # Treat one "turn" as one user+assistant pair, i.e., at most 2 messages per turn.
+    return cleaned[-(memory_turns * 2):]
+
 
 def stream_response(
     query: str,
@@ -17,6 +42,9 @@ def stream_response(
     generate_related_questions: bool,
     client: openai.OpenAI,
     model_name: str,
+    conversation_history: Optional[List[dict]] = None,
+    memory_turns: int = SERVER_FIXED_MEMORY_TURNS,
+    using_server_key: bool = True,
     image_retriever: Optional[object] = None,
     image_suggester: Optional[Callable[[str, str, object], List[dict]]] = None,
 ) -> Generator[str, None, None]:
@@ -44,15 +72,24 @@ def stream_response(
     context_block = "\n\n".join([f"[[citation:{i + 1}]] {c['snippet']}" for i, c in enumerate(contexts)])
     system_prompt = ecEasyPrompts._rag_query_text.format(context=context_block)
 
+    effective_memory_turns = _clamp_memory_turns(memory_turns, using_server_key)
+    history_for_prompt = _build_windowed_history(conversation_history or [], effective_memory_turns)
+    logger.info(
+        f"Conversation memory active: {effective_memory_turns} turn(s), using {len(history_for_prompt)} prior message(s)"
+    )
+
     llm_response_accumulated = []
 
     try:
+        chat_messages = [
+            {"role": "system", "content": system_prompt},
+            *history_for_prompt,
+            {"role": "user", "content": query},
+        ]
+
         stream = client.chat.completions.create(
             model=model_name,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": query},
-            ],
+            messages=chat_messages,
             max_tokens=1024,
             stop=STOP_WORDS,
             stream=True,

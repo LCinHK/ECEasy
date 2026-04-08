@@ -8,7 +8,7 @@ import { Menu } from 'lucide-react';
 import logo from '../assets/icon.svg';
 import { nanoid } from 'nanoid';
 import { parseStreaming } from './utils/parse-streaming';
-import type { Source, Relate, SuggestedImage } from './utils/parse-streaming';
+import type { ConversationHistoryTurn, Source, Relate, SuggestedImage } from './utils/parse-streaming';
 
 type UserLlmProvider = 'openai' | 'deepseek';
 
@@ -35,6 +35,10 @@ const SERVER_MODEL_BY_PROVIDER: Record<UserLlmProvider, string> = {
   openai: 'gpt-5-mini',
   deepseek: 'deepseek-chat',
 };
+
+const SERVER_FIXED_MEMORY_TURNS = 3;
+const MAX_USER_MEMORY_TURNS = 15;
+const GREETING_MESSAGE_TEXT = "Hello! I'm ECEasy, your HKUST ECE assistant. How can I help you today?";
 
 const API_KEY_PATTERN_BY_PROVIDER: Record<UserLlmProvider, RegExp> = {
   openai: /^sk-[A-Za-z0-9_-]{16,}$/,
@@ -74,7 +78,7 @@ const CHAT_STATE_STORAGE_KEY = 'eceasy_chat_state_v1';
 const createGreetingMessage = (): Message => ({
   id: nanoid(),
   role: 'assistant',
-  content: "Hello! I'm ECEasy, your HKUST ECE assistant. How can I help you today?",
+  content: GREETING_MESSAGE_TEXT,
 });
 
 const getChatTitle = (messages: Message[]): string => {
@@ -189,6 +193,7 @@ function MainApp() {
   const [llmConfigured, setLlmConfigured] = useState(false);
   const [llmConfigError, setLlmConfigError] = useState('');
   const [showApiKeyHint, setShowApiKeyHint] = useState(false);
+  const [userMemoryTurns, setUserMemoryTurns] = useState<number>(SERVER_FIXED_MEMORY_TURNS);
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Keep a ref to the active AbortController so we can cancel if needed
@@ -200,6 +205,9 @@ function MainApp() {
   const normalizedUserApiKey = userApiKey.trim();
   const isUserApiKeyStructurallyValid = isStructurallyValidApiKey(selectedProvider, normalizedUserApiKey);
   const serverFixedModel = SERVER_MODEL_BY_PROVIDER[selectedProvider];
+  const effectiveMemoryTurns = useServerKey
+    ? SERVER_FIXED_MEMORY_TURNS
+    : Math.min(MAX_USER_MEMORY_TURNS, Math.max(0, userMemoryTurns));
 
   const updateChatMessages = (chatId: string, updater: (prev: Message[]) => Message[]) => {
     setChatState((prev) => {
@@ -264,9 +272,23 @@ function MainApp() {
     setSelectedModel((prev) => (models.includes(prev) ? prev : models[0]));
   }, [selectedProvider, isUserApiKeyStructurallyValid, serverFixedModel]);
 
+  const buildConversationHistory = (messages: Message[]): ConversationHistoryTurn[] => {
+    const cleaned = messages
+      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .filter((m) => !m.isStreaming)
+      .map((m) => ({ role: m.role, content: (m.content ?? '').trim() }))
+      .filter((m) => m.content.length > 0)
+      .filter((m) => !(m.role === 'assistant' && m.content === GREETING_MESSAGE_TEXT))
+      .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
+
+    return cleaned.slice(-(MAX_USER_MEMORY_TURNS * 2));
+  };
+
   const runStreamingQuery = async (content: string) => {
     if (!content.trim() || isLoading) return;
     const targetChatId = currentChatId;
+    const currentMessages = messagesById[targetChatId] ?? [];
+    const conversationHistory = buildConversationHistory(currentMessages);
     activeStreamChatIdRef.current = targetChatId;
 
     // Cancel any in-flight request
@@ -308,6 +330,8 @@ function MainApp() {
           apiKey: useServerKey ? undefined : userApiKey.trim(),
           useServerKey,
           llmModel: useServerKey ? undefined : selectedModel,
+          conversationHistory,
+          memoryTurns: effectiveMemoryTurns,
         },
         // onSources — called once the sources JSON is received
         (sources) => {
@@ -693,6 +717,40 @@ function MainApp() {
                     ? 'This selected model is used only when you choose "Use my key".'
                     : `Using fixed server model: ${serverFixedModel}. Enter a valid ${selectedProvider} API key (starts with sk-) to unlock model selection.`}
                 </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Memory window (turns)</label>
+                {isUserApiKeyStructurallyValid ? (
+                  <>
+                    <input
+                      type="range"
+                      min={0}
+                      max={MAX_USER_MEMORY_TURNS}
+                      step={1}
+                      value={userMemoryTurns}
+                      onChange={(e) => setUserMemoryTurns(Number(e.target.value))}
+                      className="w-full accent-amber-600"
+                    />
+                    <div className="mt-1 text-xs text-gray-600">
+                      {userMemoryTurns} turn{userMemoryTurns === 1 ? '' : 's'} (0 = stateless)
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <input
+                      type="range"
+                      min={SERVER_FIXED_MEMORY_TURNS}
+                      max={SERVER_FIXED_MEMORY_TURNS}
+                      value={SERVER_FIXED_MEMORY_TURNS}
+                      disabled
+                      className="w-full accent-gray-300 cursor-not-allowed"
+                    />
+                    <div className="mt-1 text-xs text-gray-500">
+                      Using fixed server memory: last {SERVER_FIXED_MEMORY_TURNS} turns. Enter a valid key to customize 0-{MAX_USER_MEMORY_TURNS}.
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900">

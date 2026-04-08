@@ -1,6 +1,11 @@
-from typing import List, Optional
+from typing import List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+
+class ConversationTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
 
 
 class QueryRequest(BaseModel):
@@ -11,6 +16,8 @@ class QueryRequest(BaseModel):
     api_key: Optional[str] = None
     use_server_key: Optional[bool] = None
     llm_model: Optional[str] = None
+    conversation_history: List[ConversationTurn] = Field(default_factory=list, max_length=40)
+    memory_turns: int = Field(default=3, ge=0, le=15)
 
 
 class ImageSuggestion(BaseModel):
