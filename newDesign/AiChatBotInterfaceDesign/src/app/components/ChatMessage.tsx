@@ -291,16 +291,16 @@ export function ChatMessage({
                 </div>
               )}
 
+              {/* Suggested images — shown only after streaming completes */}
+              {!isStreaming && suggestedImages.length > 0 && (
+                <SuggestedImagesPanel images={suggestedImages} onOpen={setExpandedImage} />
+              )}
+
               {/* Sources — shown once we have them, even during streaming */}
               {sources.length > 0 && <SourcesPanel sources={sources} />}
 
               {/* Related questions — shown only after streaming completes */}
               {!isStreaming && relates && <RelatedPanel relates={relates} onSelect={onRelatedQuestion} />}
-
-              {/* Suggested images — shown only after streaming completes */}
-              {!isStreaming && suggestedImages.length > 0 && (
-                <SuggestedImagesPanel images={suggestedImages} onOpen={setExpandedImage} />
-              )}
             </>
           )}
         </div>

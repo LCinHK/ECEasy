@@ -1,3 +1,4 @@
+import json
 import re
 import uuid
 from typing import List
@@ -71,6 +72,69 @@ def search_with_duckduckgo(query: str) -> List[dict]:
         return []
 
 
+def _clean_related_question(text: str) -> str:
+    cleaned = text.strip().strip('"').strip("'")
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned
+
+
+def _parse_related_questions(content: str) -> List[str]:
+    if not content:
+        return []
+
+    # 1) Preferred format: JSON array of strings.
+    try:
+        parsed = json.loads(content)
+        if isinstance(parsed, list):
+            out = []
+            for item in parsed:
+                if isinstance(item, str):
+                    q = _clean_related_question(item)
+                    if q:
+                        out.append(q)
+            if out:
+                return out
+    except Exception:
+        pass
+
+    # 2) Common fallback: markdown / plain text list lines.
+    questions: List[str] = []
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # Drop markdown bullets/numbering prefixes.
+        line = re.sub(r"^(?:[*\-•]|\d+[.)])\s*", "", line)
+        line = _clean_related_question(line)
+
+        # Accept questions with either ASCII or full-width question mark,
+        # and also accept imperative follow-up forms.
+        if line.endswith("?") or line.endswith("？") or len(line) > 8:
+            questions.append(line)
+
+    # 3) If model returned a quasi-JSON single line that failed loads,
+    # extract quoted strings as a last resort.
+    if not questions:
+        quoted_items = re.findall(r'"([^"\\]*(?:\\.[^"\\]*)*)"', content)
+        for item in quoted_items:
+            q = _clean_related_question(item)
+            if q:
+                questions.append(q)
+
+    # Preserve order while de-duplicating.
+    deduped: List[str] = []
+    seen = set()
+    for q in questions:
+        key = q.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(q)
+
+    return deduped
+
+
 def get_related_questions(
     query: str,
     contexts: List[dict],
@@ -87,7 +151,7 @@ def get_related_questions(
     try:
         response = client.chat.completions.create(
             model=model_name,
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": prompt}],  # type: ignore[arg-type]
             max_tokens=256,
             temperature=0.7,
         )
@@ -97,16 +161,9 @@ def get_related_questions(
         content = response.choices[0].message.content
         logger.info(f"Related questions raw output: {content}")
 
-        questions = []
-        for line in content.split("\n"):
-            line = line.strip()
-            if line and (line.endswith("?") or line.startswith("-") or line.startswith("*") or line[0].isdigit()):
-                line = re.sub(r"^[*\-\d.]+\s*", "", line)
-                questions.append(line)
-
+        questions = _parse_related_questions(content)
         logger.info(f"Parsed {len(questions)} related questions")
         return questions[:3]
     except Exception as e:
         logger.warning(f"Related questions generation failed: {e}")
         return []
-

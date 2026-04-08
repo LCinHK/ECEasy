@@ -31,6 +31,22 @@ const DEEPSEEK_MODELS = ['deepseek-r1', 'deepseek-v3', 'deepseek-v3-2-exp'] as c
 const getModelsForProvider = (provider: UserLlmProvider): readonly string[] =>
   provider === 'openai' ? OPENAI_MODELS : DEEPSEEK_MODELS;
 
+const SERVER_MODEL_BY_PROVIDER: Record<UserLlmProvider, string> = {
+  openai: 'gpt-5-mini',
+  deepseek: 'deepseek-chat',
+};
+
+const API_KEY_PATTERN_BY_PROVIDER: Record<UserLlmProvider, RegExp> = {
+  openai: /^sk-[A-Za-z0-9_-]{16,}$/,
+  deepseek: /^sk-[A-Za-z0-9_-]{16,}$/,
+};
+
+const isStructurallyValidApiKey = (provider: UserLlmProvider, rawKey: string): boolean => {
+  const key = rawKey.trim();
+  if (!key) return false;
+  return API_KEY_PATTERN_BY_PROVIDER[provider].test(key);
+};
+
 interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -181,6 +197,9 @@ function MainApp() {
 
   const { threads, currentChatId, messagesById } = chatState;
   const messages = messagesById[currentChatId] ?? [];
+  const normalizedUserApiKey = userApiKey.trim();
+  const isUserApiKeyStructurallyValid = isStructurallyValidApiKey(selectedProvider, normalizedUserApiKey);
+  const serverFixedModel = SERVER_MODEL_BY_PROVIDER[selectedProvider];
 
   const updateChatMessages = (chatId: string, updater: (prev: Message[]) => Message[]) => {
     setChatState((prev) => {
@@ -237,9 +256,13 @@ function MainApp() {
   }, [messages]);
 
   useEffect(() => {
+    if (!isUserApiKeyStructurallyValid) {
+      setSelectedModel(serverFixedModel);
+      return;
+    }
     const models = getModelsForProvider(selectedProvider);
     setSelectedModel((prev) => (models.includes(prev) ? prev : models[0]));
-  }, [selectedProvider]);
+  }, [selectedProvider, isUserApiKeyStructurallyValid, serverFixedModel]);
 
   const runStreamingQuery = async (content: string) => {
     if (!content.trim() || isLoading) return;
@@ -365,8 +388,12 @@ function MainApp() {
   };
 
   const confirmUseOwnKey = async () => {
-    if (!userApiKey.trim()) {
+    if (!normalizedUserApiKey) {
       setLlmConfigError('Please enter your API key, or choose "Use ECEasy key".');
+      return;
+    }
+    if (!isUserApiKeyStructurallyValid) {
+      setLlmConfigError(`Your ${selectedProvider} API key format looks invalid. Please check and try again.`);
       return;
     }
     setUseServerKey(false);
@@ -383,6 +410,7 @@ function MainApp() {
 
   const confirmUseServerKey = async () => {
     setUseServerKey(true);
+    setSelectedModel(SERVER_MODEL_BY_PROVIDER[selectedProvider]);
     setLlmConfigured(true);
     setShowLlmModal(false);
     setLlmConfigError('');
@@ -638,25 +666,34 @@ function MainApp() {
                 </p>
               </div>
 
-              {userApiKey.trim().length > 0 && (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
-                  <select
-                    value={selectedModel}
-                    onChange={(e) => setSelectedModel(e.target.value)}
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                  >
-                    {getModelsForProvider(selectedProvider).map((model) => (
-                      <option key={model} value={model}>
-                        {model}
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-1 text-xs text-gray-500">
-                    This selected model is used only when you choose "Use my key".
-                  </p>
-                </div>
-              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                <select
+                  value={isUserApiKeyStructurallyValid ? selectedModel : serverFixedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  disabled={!isUserApiKeyStructurallyValid}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 ${
+                    isUserApiKeyStructurallyValid
+                      ? 'border-gray-300 bg-white text-gray-900'
+                      : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                  }`}
+                >
+                  {isUserApiKeyStructurallyValid
+                    ? getModelsForProvider(selectedProvider).map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))
+                    : (
+                        <option value={serverFixedModel}>{serverFixedModel}</option>
+                      )}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  {isUserApiKeyStructurallyValid
+                    ? 'This selected model is used only when you choose "Use my key".'
+                    : `Using fixed server model: ${serverFixedModel}. Enter a valid ${selectedProvider} API key (starts with sk-) to unlock model selection.`}
+                </p>
+              </div>
 
               <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900">
                 If you skip and use ECEasy&apos;s key, requests may incur our API costs and might be rate-limited (May not be available at all times).
@@ -685,7 +722,12 @@ function MainApp() {
               </button>
               <button
                 onClick={confirmUseOwnKey}
-                className="px-4 py-2 rounded-lg bg-amber-600 text-white text-sm hover:bg-amber-700"
+                disabled={!isUserApiKeyStructurallyValid}
+                className={`px-4 py-2 rounded-lg text-white text-sm ${
+                  isUserApiKeyStructurallyValid
+                    ? 'bg-amber-600 hover:bg-amber-700'
+                    : 'bg-amber-300 cursor-not-allowed'
+                }`}
               >
                 Use my key
               </button>

@@ -1,6 +1,8 @@
 import { Send, Paperclip, X, Square } from 'lucide-react';
 import { useState, KeyboardEvent, useRef } from 'react';
 
+const FILE_UPLOAD_ENABLED = false;
+
 interface MessageInputProps {
   onSendMessage: (message: string) => void;
   disabled?: boolean;
@@ -14,7 +16,7 @@ export function MessageInput({ onSendMessage, disabled, isLoading, onStopGenerat
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleSend = () => {
-    if ((message.trim() || uploadedFiles.length > 0) && !disabled) {
+    if (message.trim() && !disabled) {
       onSendMessage(message);
       setMessage('');
       setUploadedFiles([]);
@@ -29,6 +31,13 @@ export function MessageInput({ onSendMessage, disabled, isLoading, onStopGenerat
   };
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!FILE_UPLOAD_ENABLED) {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      return;
+    }
+
     const files = e.target.files;
     if (files) {
       const newFiles = Array.from(files);
@@ -48,7 +57,7 @@ export function MessageInput({ onSendMessage, disabled, isLoading, onStopGenerat
     <div className="border-t border-amber-200 bg-white/95 backdrop-blur-sm">
       <div className="max-w-4xl mx-auto px-4 py-4">
         {/* Uploaded Files Display */}
-        {uploadedFiles.length > 0 && (
+        {FILE_UPLOAD_ENABLED && uploadedFiles.length > 0 && (
           <div className="mb-3 flex flex-wrap gap-2">
             {uploadedFiles.map((file, index) => (
               <div
@@ -78,15 +87,16 @@ export function MessageInput({ onSendMessage, disabled, isLoading, onStopGenerat
             accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             multiple
             onChange={handleFileSelect}
+            disabled={!FILE_UPLOAD_ENABLED}
             className="hidden"
           />
 
           {/* Upload Button */}
           <button
             onClick={() => fileInputRef.current?.click()}
-            disabled={disabled}
+            disabled={disabled || !FILE_UPLOAD_ENABLED}
             className="flex-shrink-0 p-2 rounded-lg hover:bg-amber-200 transition-colors text-amber-700 hover:text-amber-900 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Upload files"
+            title={FILE_UPLOAD_ENABLED ? 'Upload files' : 'File upload coming soon'}
           >
             <Paperclip size={18} />
           </button>
@@ -122,9 +132,9 @@ export function MessageInput({ onSendMessage, disabled, isLoading, onStopGenerat
           ) : (
             <button
               onClick={handleSend}
-              disabled={(!message.trim() && uploadedFiles.length === 0) || disabled}
+              disabled={!message.trim() || disabled}
               className={`flex-shrink-0 p-2 rounded-lg transition-colors ${
-                (message.trim() || uploadedFiles.length > 0) && !disabled
+                message.trim() && !disabled
                   ? 'bg-amber-600 text-white hover:bg-amber-700'
                   : 'bg-amber-300 text-amber-500 cursor-not-allowed'
               }`}
