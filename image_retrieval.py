@@ -29,6 +29,68 @@ import re
 from loguru import logger
 
 
+COURSE_CODE_RE = re.compile(r"\b([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)\b", re.IGNORECASE)
+TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_\-+&]{1,}")
+STOPWORDS = {
+    "the", "a", "an", "and", "or", "to", "of", "for", "in", "on", "at", "with", "is", "are",
+    "what", "how", "why", "can", "could", "should", "would", "need", "about", "show", "tell",
+    "please", "question", "questions", "course", "courses", "student", "students",
+}
+VISUAL_INTENT_TERMS = {
+    "image", "images", "diagram", "chart", "flow", "table", "pathway", "pattern", "study",
+    "curriculum", "structure", "track", "group", "map", "plan",
+}
+
+
+def _normalize_course_code(raw: str) -> str:
+    compact = re.sub(r"\s+", "", raw).replace("-", "").replace("_", "").upper()
+    m = COURSE_CODE_RE.search(compact)
+    if not m:
+        return ""
+    return f"{m.group(1).upper()}{m.group(2).upper()}"
+
+
+def _extract_course_codes(text: str) -> List[str]:
+    found = {_normalize_course_code(m.group(0)) for m in COURSE_CODE_RE.finditer(text or "")}
+    return [code for code in sorted(found) if code]
+
+
+def _tokenize(text: str) -> List[str]:
+    tokens = []
+    for t in TOKEN_RE.findall((text or "").lower()):
+        if len(t) < 3 and not any(ch.isdigit() for ch in t):
+            continue
+        if t in STOPWORDS:
+            continue
+        tokens.append(t)
+    return tokens
+
+
+def _has_visual_intent(text: str) -> bool:
+    tokens = set(_tokenize(text))
+    return bool(tokens & VISUAL_INTENT_TERMS)
+
+
+def _dedupe_by_relpath(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    deduped = []
+    for img in items:
+        relpath = img.get("source_relpath", "")
+        if relpath in seen:
+            continue
+        seen.add(relpath)
+        deduped.append(img)
+    return deduped
+
+
+def _suggestion_debug_line(mode: str, query: str, query_codes: List[str], selected: List[Dict[str, Any]]) -> str:
+    preview_paths = [img.get("source_relpath", "") for img in selected[:5]]
+    return (
+        f"[ImageSuggest] mode={mode} codes={query_codes or []} count={len(selected)} "
+        f"query='{query[:120]}' paths={preview_paths}"
+    )
+
+
 class ImageRetriever:
     """Load and query image manifests from FAISS index directories."""
 
@@ -85,7 +147,9 @@ class ImageRetriever:
         Returns:
             List of image metadata dicts matching the course code.
         """
-        normalized = course_code.upper().replace(" ", "").replace("-", "")
+        normalized = _normalize_course_code(course_code)
+        if not normalized:
+            return []
         return [img for img in self.manifest_data if img.get("course_code", "").upper() == normalized]
 
     def search_by_department(self, dept: str) -> List[Dict[str, Any]]:
@@ -124,10 +188,14 @@ class ImageRetriever:
         Returns:
             List of image metadata dicts containing any of the keywords.
         """
+        cleaned_keywords = [k.lower().strip() for k in keywords if len(k.strip()) >= 3 and k.lower().strip() not in STOPWORDS]
+        if not cleaned_keywords:
+            return []
+
         results = []
         for img in self.manifest_data:
             text = img.get(field, "").lower()
-            if any(kw.lower() in text for kw in keywords):
+            if any(kw in text for kw in cleaned_keywords):
                 results.append(img)
         return results
 
@@ -143,27 +211,58 @@ class ImageRetriever:
             List of image metadata dicts matching the query.
         """
         results = []
-        query_lower = query.lower()
-        
+        query_tokens = _tokenize(query)
+        query_codes = set(_extract_course_codes(query))
+
         for img in self.manifest_data:
-            # Score based on matches across different fields
-            score = 0
-            if query_lower in img.get("course_code", "").lower():
-                score += 10
-            if query_lower in img.get("department", "").lower():
-                score += 5
-            if query_lower in img.get("description", "").lower():
-                score += 3
-            if query_lower in img.get("source_name", "").lower():
-                score += 2
-            if query_lower in img.get("doc_type", "").lower():
-                score += 1
-            
-            if score > 0:
-                img["_relevance_score"] = score
-                results.append(img)
-        
-        # Sort by relevance score
+            score = 0.0
+            matched_terms = 0
+
+            course_code = str(img.get("course_code", "")).upper()
+            department = str(img.get("department", "")).lower()
+            description = str(img.get("description", "")).lower()
+            source_name = str(img.get("source_name", "")).lower()
+            source_relpath = str(img.get("source_relpath", "")).lower()
+            doc_type = str(img.get("doc_type", "")).lower()
+
+            if query_codes:
+                if course_code in query_codes:
+                    score += 100.0
+                else:
+                    # If query has an explicit course code, do not surface unrelated course-track images.
+                    continue
+
+            for token in query_tokens:
+                token_hit = False
+                if token in description:
+                    score += 3.0
+                    token_hit = True
+                if token in source_name:
+                    score += 2.0
+                    token_hit = True
+                if token in source_relpath:
+                    score += 2.0
+                    token_hit = True
+                if token in doc_type:
+                    score += 1.0
+                    token_hit = True
+                if token == department:
+                    score += 4.0
+                    token_hit = True
+                if token_hit:
+                    matched_terms += 1
+
+            if query_codes and score >= 100.0:
+                enriched = dict(img)
+                enriched["_relevance_score"] = round(score, 3)
+                results.append(enriched)
+                continue
+
+            if (not query_codes) and score >= 4.0 and matched_terms >= 1:
+                enriched = dict(img)
+                enriched["_relevance_score"] = round(score, 3)
+                results.append(enriched)
+
         results.sort(key=lambda x: x.get("_relevance_score", 0), reverse=True)
         return results
 
@@ -219,35 +318,37 @@ def suggest_images_for_response(query: str, response_text: str, retriever: Optio
     if not retriever.manifest_data:
         return []
 
-    # Extract course codes from query and response
-    course_code_pattern = re.compile(r"[A-Za-z]{4}\s*\d{4}[A-Za-z]?", re.IGNORECASE)
-    codes_in_query = course_code_pattern.findall(query)
-    codes_in_response = course_code_pattern.findall(response_text)
+    query_codes = _extract_course_codes(query)
 
-    all_codes = set(codes_in_query + codes_in_response)
+    # Priority 1: strict exact course-code mapping from user query only.
+    if query_codes:
+        suggested = []
+        for code in query_codes:
+            suggested.extend(retriever.search_by_course_code(code))
+        selected = _dedupe_by_relpath(suggested)[:5]
+        logger.info(_suggestion_debug_line("strict_course_code", query, query_codes, selected))
+        return selected
 
-    suggested = []
+    # Priority 2: only run fuzzy retrieval when query has no explicit course code.
+    ranked = retriever.search_by_query(query)
+    if ranked:
+        selected = _dedupe_by_relpath(ranked)[:5]
+        logger.info(_suggestion_debug_line("fuzzy_ranked", query, query_codes, selected))
+        return selected
 
-    # Search by course code
-    for code in all_codes:
-        images = retriever.search_by_course_code(code)
-        suggested.extend(images)
+    # Priority 3: optional low-confidence fallback only for explicit visual intent.
+    if _has_visual_intent(query):
+        keywords = _tokenize(query)
+        if response_text:
+            keywords.extend(_tokenize(response_text)[:6])
+        fallback = retriever.search_by_keywords(keywords, field="description")
+        fallback.extend(retriever.search_by_keywords(keywords, field="source_name"))
+        selected = _dedupe_by_relpath(fallback)[:5]
+        logger.info(_suggestion_debug_line("visual_fallback", query, query_codes, selected))
+        return selected
 
-    # Fallback: search by keywords from query
-    if not suggested:
-        keywords = query.lower().split()
-        suggested = retriever.search_by_keywords(keywords)
-
-    # Remove duplicates by source_relpath
-    seen = set()
-    unique_suggestions = []
-    for img in suggested:
-        relpath = img.get("source_relpath", "")
-        if relpath not in seen:
-            seen.add(relpath)
-            unique_suggestions.append(img)
-
-    return unique_suggestions[:5]  # Return top 5 suggestions
+    logger.info(_suggestion_debug_line("no_match", query, query_codes, []))
+    return []
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import re
 import shutil
 import json
 from pathlib import Path
+from tempfile import mkdtemp
 
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -23,11 +24,12 @@ from langchain_community.document_loaders import (
     PyPDFLoader, 
     Docx2txtLoader, 
     TextLoader,
-    BSHTMLLoader   # ← NEW: Added for HTML support
 )
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
+from bs4 import BeautifulSoup
 
 # ======== Configuration ========
 BASE_DIR = Path(__file__).resolve().parent
@@ -41,6 +43,7 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 
 # Metadata enrichment controls
 PREPEND_METADATA_TO_CHUNK_TEXT = True
+TEXT_EXTENSIONS = {".txt", ".md", ".csv"}
 
 # Supports patterns like: COMP2011, COMP 2011, COMP-2011, COMP2011_Spring2025-26
 COURSE_CODE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)(?![A-Za-z0-9])")
@@ -92,6 +95,10 @@ def _deduplicate_files(file_paths: list[Path], data_path: Path) -> list[Path]:
 
 def _detect_doc_type(rel_path: Path) -> str:
     rel = str(rel_path).replace("\\", "/").lower()
+    if rel.startswith("ustspace_reviews/"):
+        return "course_review"
+    if rel.startswith("ust_ranking/"):
+        return "university_ranking"
     if rel.startswith("course_syllabus/") or "course syllabus/" in rel:
         return "course_syllabus"
     if rel.startswith("program_requirements/") or "program requirement/" in rel:
@@ -140,16 +147,60 @@ def _extract_structured_metadata(file_path: Path, data_path: Path) -> dict:
             course_code = f"{dept}{stem_match.group(1).upper()}"
 
     section = rel_path.parts[0].lower() if rel_path.parts else ""
+    subsection = rel_path.parts[1].lower() if len(rel_path.parts) > 1 else ""
+
+    source_origin = ""
+    if section == "ustspace_reviews":
+        source_origin = "ustspace"
+    elif section == "ust_ranking":
+        source_origin = "ust_rankings"
 
     return {
         "source_relpath": rel_posix,
         "source_name": file_path.name,
         "source_stem": file_path.stem,
         "knowledge_section": section,
+        "knowledge_subsection": subsection,
+        "source_origin": source_origin,
         "doc_type": _detect_doc_type(rel_path),
         "department": dept,
         "course_code": course_code,
     }
+
+
+def _load_html_as_document(html_path: Path) -> list[Document]:
+    """Parse HTML to clean text while dropping scripts/styles noise from saved web pages."""
+    raw = html_path.read_text(encoding="utf-8", errors="ignore")
+    soup = BeautifulSoup(raw, "html.parser")
+
+    for tag in soup(["script", "style", "noscript", "svg"]):
+        tag.decompose()
+
+    content_root = soup.find("main") or soup.find("article") or soup.body or soup
+    title = (soup.title.string or "").strip() if soup.title else ""
+    text = "\n".join(content_root.stripped_strings)
+
+    cleaned_lines = []
+    for line in text.splitlines():
+        line = re.sub(r"\s+", " ", line).strip()
+        if not line:
+            continue
+        if len(line) > 220 and "{" in line and "}" in line:
+            continue
+        cleaned_lines.append(line)
+
+    if title:
+        cleaned_lines.insert(0, f"Title: {title}")
+
+    cleaned_text = "\n".join(cleaned_lines)
+    return [Document(page_content=cleaned_text, metadata={"title": title} if title else {})]
+
+
+def _load_plain_text_file(path: Path) -> list[Document]:
+    try:
+        return TextLoader(str(path), encoding="utf-8").load()
+    except Exception:
+        return TextLoader(str(path), encoding="latin-1").load()
 
 
 def _index_name_from_hub(hub_name: str) -> str:
@@ -309,30 +360,28 @@ def load_all_documents(data_path: Path):
             skipped.append((str(docx_path), str(e)))
             print(f"    [DOCX] SKIP {docx_path.name}: {e}")
 
-    # --- TXT ---
-    txt_files = _deduplicate_files(list(data_path.rglob("*.txt")), data_path)
-    print(f"  Found {len(txt_files)} TXT file(s)")
-    for txt_path in txt_files:
-        if _should_skip_file(txt_path):
+    # --- Plain text-like files (TXT/MD/CSV) ---
+    text_files = _deduplicate_files(
+        [p for p in data_path.rglob("*") if p.is_file() and p.suffix.lower() in TEXT_EXTENSIONS],
+        data_path,
+    )
+    print(f"  Found {len(text_files)} text file(s) ({', '.join(sorted(TEXT_EXTENSIONS))})")
+    for text_path in text_files:
+        if _should_skip_file(text_path):
             continue
         try:
-            try:
-                loader = TextLoader(str(txt_path), encoding="utf-8")
-                docs = loader.load()
-            except Exception:
-                loader = TextLoader(str(txt_path), encoding="latin-1")
-                docs = loader.load()
-            structured_meta = _extract_structured_metadata(txt_path, data_path)
+            docs = _load_plain_text_file(text_path)
+            structured_meta = _extract_structured_metadata(text_path, data_path)
             for doc in docs:
-                doc.metadata["source"] = str(txt_path)
+                doc.metadata["source"] = str(text_path)
                 doc.metadata.update(structured_meta)
             all_docs.extend(docs)
-            print(f"    [TXT]  {txt_path.relative_to(data_path)}  ({len(docs)} doc(s))")
+            print(f"    [TXT]  {text_path.relative_to(data_path)}  ({len(docs)} doc(s))")
         except Exception as e:
-            skipped.append((str(txt_path), str(e)))
-            print(f"    [TXT]  SKIP {txt_path.name}: {e}")
+            skipped.append((str(text_path), str(e)))
+            print(f"    [TXT]  SKIP {text_path.name}: {e}")
 
-    # === NEW: HTML Support ===
+    # --- HTML ---
     html_files = _deduplicate_files(
         list(data_path.rglob("*.html")) + list(data_path.rglob("*.htm")),
         data_path,
@@ -342,9 +391,7 @@ def load_all_documents(data_path: Path):
         if _should_skip_file(html_path):
             continue
         try:
-            # BSHTMLLoader extracts clean text from HTML (removes scripts, styles, etc.)
-            loader = BSHTMLLoader(str(html_path))
-            docs = loader.load()
+            docs = _load_html_as_document(html_path)
             structured_meta = _extract_structured_metadata(html_path, data_path)
             for doc in docs:
                 doc.metadata["source"] = str(html_path)
@@ -408,16 +455,22 @@ def main():
             dt = chunk.metadata.get("doc_type", "")
             src = chunk.metadata.get("source_relpath", "")
             sec = chunk.metadata.get("knowledge_section", "")
+            sub = chunk.metadata.get("knowledge_subsection", "")
+            origin = chunk.metadata.get("source_origin", "")
             if cc:
                 header_parts.append(f"COURSE_CODE={cc}")
             if dep:
                 header_parts.append(f"DEPARTMENT={dep}")
             if dt:
                 header_parts.append(f"DOC_TYPE={dt}")
+            if origin:
+                header_parts.append(f"ORIGIN={origin}")
             if src:
                 header_parts.append(f"SOURCE={src}")
             if sec:
                 header_parts.append(f"SECTION={sec}")
+            if sub:
+                header_parts.append(f"SUBSECTION={sub}")
 
             if header_parts:
                 chunk.page_content = f"[META] {' | '.join(header_parts)}\n\n{chunk.page_content}"
@@ -441,13 +494,24 @@ def main():
         embedding=embeddings,
     )
 
-    # Remove old index for this model before saving
-    old_index = Path(index_path)
-    if old_index.exists():
-        shutil.rmtree(old_index)
-        print(f"Removed old index at '{index_path}'")
+    # Save to temp directory first, then atomically replace old index.
+    temp_parent = Path(mkdtemp(prefix="eceasy_faiss_build_", dir=str(BASE_DIR)))
+    temp_index_path = temp_parent / Path(index_path).name
+    vectorstore.save_local(str(temp_index_path))
 
-    vectorstore.save_local(index_path)
+    old_index = Path(index_path)
+    backup_index = old_index.with_name(f"{old_index.name}_backup")
+    if backup_index.exists():
+        shutil.rmtree(backup_index, ignore_errors=True)
+
+    if old_index.exists():
+        old_index.rename(backup_index)
+
+    temp_index_path.rename(old_index)
+
+    if backup_index.exists():
+        shutil.rmtree(backup_index, ignore_errors=True)
+    shutil.rmtree(temp_parent, ignore_errors=True)
     print(f"\nDone! FAISS index saved to: '{index_path}' ({len(chunks)} vectors)")
 
     # Save image manifest

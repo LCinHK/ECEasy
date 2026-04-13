@@ -53,6 +53,7 @@ export interface LlmRuntimeConfig {
   apiKey?: string;
   useServerKey?: boolean;
   llmModel?: string;
+  baseUrl?: string;
   conversationHistory?: ConversationHistoryTurn[];
   memoryTurns?: number;
 }
@@ -172,6 +173,7 @@ export async function parseStreaming(
       api_key: llmConfig.apiKey,
       use_server_key: llmConfig.useServerKey,
       llm_model: llmConfig.llmModel,
+      base_url: llmConfig.baseUrl,
       conversation_history: llmConfig.conversationHistory ?? [],
       memory_turns: llmConfig.memoryTurns,
     }),

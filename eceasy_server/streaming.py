@@ -1,5 +1,7 @@
 import json
 import shelve
+import ast
+import re
 from typing import Callable, Generator, List, Optional
 from urllib.parse import quote
 
@@ -12,6 +14,90 @@ from .retrieval import get_rag_context, get_related_questions, search_with_duckd
 
 SERVER_FIXED_MEMORY_TURNS = 3
 MAX_MEMORY_TURNS = 15
+SERVER_PROMPT_TOKEN_BUDGET = 3200
+
+
+def _sanitize_error_text(text: str) -> str:
+    if not text:
+        return ""
+    sanitized = re.sub(r"sk-[A-Za-z0-9\-_]+", "sk-***", text)
+    sanitized = re.sub(r"(ApiKey\s*[:：]\s*)([^\s)\]，,]+)", r"\1***", sanitized, flags=re.IGNORECASE)
+    return sanitized.strip()
+
+
+def _extract_error_payload(raw_error: str) -> dict:
+    if not raw_error:
+        return {}
+
+    start = raw_error.find("{")
+    end = raw_error.rfind("}")
+    if start < 0 or end <= start:
+        return {}
+
+    payload_text = raw_error[start:end + 1]
+    try:
+        parsed = ast.literal_eval(payload_text)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _parse_llm_error(exc: Exception) -> tuple[int | None, str, str]:
+    raw = str(exc)
+    status_code = getattr(exc, "status_code", None)
+    code = ""
+    message = ""
+
+    if isinstance(status_code, str) and status_code.isdigit():
+        status_code = int(status_code)
+
+    if status_code is None:
+        m = re.search(r"Error\s+code\s*:\s*(\d{3})", raw, flags=re.IGNORECASE)
+        if m:
+            status_code = int(m.group(1))
+
+    payload = _extract_error_payload(raw)
+    if payload:
+        err_obj = payload.get("error", payload)
+        if isinstance(err_obj, dict):
+            message = str(err_obj.get("message") or "").strip()
+            code = str(err_obj.get("code") or err_obj.get("type") or "").strip()
+
+    if not message:
+        message = raw
+
+    return status_code, _sanitize_error_text(message), _sanitize_error_text(code)
+
+
+def _format_llm_error_for_user(exc: Exception) -> str:
+    status_code, message, code = _parse_llm_error(exc)
+    lower = message.lower()
+
+    category = "unknown"
+    user_msg = "The language model request failed. Please try again later."
+
+    if status_code in {401, 403} or "forbidden" in lower or "unauthorized" in lower:
+        category = "auth_or_permission"
+        user_msg = "The API key or endpoint does not have permission for this request."
+    if "token" in lower and ("4096" in lower or "prompt" in lower or "maximum context" in lower or "too long" in lower):
+        category = "prompt_too_long"
+        user_msg = "The request is too long for this API key/endpoint token limit. Try a shorter question or reduce memory turns."
+    elif status_code == 429 or "rate limit" in lower or "too many requests" in lower:
+        category = "rate_limited"
+        user_msg = "Rate limit reached. Please wait and retry."
+    elif status_code in {500, 502, 503, 504} or "timeout" in lower:
+        category = "provider_unavailable"
+        user_msg = "The model provider is temporarily unavailable. Please retry in a moment."
+
+    detail_parts = []
+    if status_code is not None:
+        detail_parts.append(f"status={status_code}")
+    if code:
+        detail_parts.append(f"code={code}")
+
+    detail_suffix = f" ({', '.join(detail_parts)})" if detail_parts else ""
+    excerpt = f" Provider says: {message[:220]}" if message else ""
+    return f"\n[Error generating response: {user_msg}{detail_suffix}.{excerpt}]"
 
 
 def _clamp_memory_turns(memory_turns: int, using_server_key: bool) -> int:
@@ -34,6 +120,33 @@ def _build_windowed_history(conversation_history: List[dict], memory_turns: int)
 
     # Treat one "turn" as one user+assistant pair, i.e., at most 2 messages per turn.
     return cleaned[-(memory_turns * 2):]
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, (len(text or "") // 4) + 1)
+
+
+def _reduce_history_for_budget(
+    system_prompt: str,
+    query: str,
+    conversation_history: List[dict],
+    memory_turns: int,
+    prompt_budget: int,
+) -> tuple[int, List[dict], int]:
+    effective_memory_turns = max(0, int(memory_turns))
+    history_for_prompt = _build_windowed_history(conversation_history, effective_memory_turns)
+
+    def estimated_total(history: List[dict]) -> int:
+        history_tokens = sum(_estimate_tokens(turn.get("content", "")) for turn in history)
+        return _estimate_tokens(system_prompt) + _estimate_tokens(query) + history_tokens
+
+    total_tokens = estimated_total(history_for_prompt)
+    while effective_memory_turns > 0 and total_tokens > prompt_budget:
+        effective_memory_turns -= 1
+        history_for_prompt = _build_windowed_history(conversation_history, effective_memory_turns)
+        total_tokens = estimated_total(history_for_prompt)
+
+    return effective_memory_turns, history_for_prompt, total_tokens
 
 
 def stream_response(
@@ -74,6 +187,18 @@ def stream_response(
 
     effective_memory_turns = _clamp_memory_turns(memory_turns, using_server_key)
     history_for_prompt = _build_windowed_history(conversation_history or [], effective_memory_turns)
+    if using_server_key:
+        effective_memory_turns, history_for_prompt, estimated_tokens = _reduce_history_for_budget(
+            system_prompt,
+            query,
+            conversation_history or [],
+            effective_memory_turns,
+            SERVER_PROMPT_TOKEN_BUDGET,
+        )
+        if estimated_tokens > SERVER_PROMPT_TOKEN_BUDGET:
+            logger.warning(
+                f"Conversation prompt still estimated at ~{estimated_tokens} tokens after trimming memory; the provider may still reject it."
+            )
     logger.info(
         f"Conversation memory active: {effective_memory_turns} turn(s), using {len(history_for_prompt)} prior message(s)"
     )
@@ -104,8 +229,11 @@ def stream_response(
                 llm_response_accumulated.append(content)
                 yield content
     except Exception as e:
-        logger.error(f"LLM Stream error: {e}")
-        yield f"\n[Error generating response: {e}]"
+        parsed_status, parsed_msg, parsed_code = _parse_llm_error(e)
+        logger.error(
+            f"LLM Stream error parsed (status={parsed_status}, code={parsed_code}): {parsed_msg}"
+        )
+        yield _format_llm_error_for_user(e)
 
     related_questions_json = "[]"
     if SHOULD_DO_RELATED_QUESTIONS and generate_related_questions:

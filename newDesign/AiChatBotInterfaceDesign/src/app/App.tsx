@@ -8,7 +8,7 @@ import { Menu } from 'lucide-react';
 import logo from '../assets/icon.svg';
 import { nanoid } from 'nanoid';
 import { parseStreaming } from './utils/parse-streaming';
-import type { ConversationHistoryTurn, Source, Relate, SuggestedImage } from './utils/parse-streaming';
+import type { ConversationHistoryTurn, LlmRuntimeConfig, Source, Relate, SuggestedImage } from './utils/parse-streaming';
 
 type UserLlmProvider = 'openai' | 'deepseek';
 
@@ -49,6 +49,22 @@ const isStructurallyValidApiKey = (provider: UserLlmProvider, rawKey: string): b
   const key = rawKey.trim();
   if (!key) return false;
   return API_KEY_PATTERN_BY_PROVIDER[provider].test(key);
+};
+
+const isStructurallyValidBaseUrl = (rawUrl: string): boolean => {
+  const value = rawUrl.trim();
+  if (!value) return true;
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+const DEFAULT_BASE_URL_BY_PROVIDER: Record<UserLlmProvider, string> = {
+  openai: '',
+  deepseek: '',
 };
 
 interface Message {
@@ -189,6 +205,9 @@ function MainApp() {
   const [selectedProvider, setSelectedProvider] = useState<UserLlmProvider>('openai');
   const [selectedModel, setSelectedModel] = useState<string>('gpt-5-mini');
   const [userApiKey, setUserApiKey] = useState('');
+  const [userBaseUrlByProvider, setUserBaseUrlByProvider] = useState<Record<UserLlmProvider, string>>(
+    DEFAULT_BASE_URL_BY_PROVIDER,
+  );
   const [useServerKey, setUseServerKey] = useState(false);
   const [llmConfigured, setLlmConfigured] = useState(false);
   const [llmConfigError, setLlmConfigError] = useState('');
@@ -204,6 +223,8 @@ function MainApp() {
   const messages = messagesById[currentChatId] ?? [];
   const normalizedUserApiKey = userApiKey.trim();
   const isUserApiKeyStructurallyValid = isStructurallyValidApiKey(selectedProvider, normalizedUserApiKey);
+  const normalizedUserBaseUrl = userBaseUrlByProvider[selectedProvider].trim();
+  const isUserBaseUrlStructurallyValid = isStructurallyValidBaseUrl(normalizedUserBaseUrl);
   const serverFixedModel = SERVER_MODEL_BY_PROVIDER[selectedProvider];
   const effectiveMemoryTurns = useServerKey
     ? SERVER_FIXED_MEMORY_TURNS
@@ -272,7 +293,7 @@ function MainApp() {
     setSelectedModel((prev) => (models.includes(prev) ? prev : models[0]));
   }, [selectedProvider, isUserApiKeyStructurallyValid, serverFixedModel]);
 
-  const buildConversationHistory = (messages: Message[]): ConversationHistoryTurn[] => {
+  const buildConversationHistory = (messages: Message[], memoryTurns: number): ConversationHistoryTurn[] => {
     const cleaned = messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .filter((m) => !m.isStreaming)
@@ -281,14 +302,15 @@ function MainApp() {
       .filter((m) => !(m.role === 'assistant' && m.content === GREETING_MESSAGE_TEXT))
       .map((m) => ({ role: m.role, content: m.content.slice(0, 4000) }));
 
-    return cleaned.slice(-(MAX_USER_MEMORY_TURNS * 2));
+    const boundedTurns = Math.max(0, Math.min(MAX_USER_MEMORY_TURNS, memoryTurns));
+    return cleaned.slice(-(boundedTurns * 2));
   };
 
   const runStreamingQuery = async (content: string) => {
     if (!content.trim() || isLoading) return;
     const targetChatId = currentChatId;
     const currentMessages = messagesById[targetChatId] ?? [];
-    const conversationHistory = buildConversationHistory(currentMessages);
+    const conversationHistory = buildConversationHistory(currentMessages, effectiveMemoryTurns);
     activeStreamChatIdRef.current = targetChatId;
 
     // Cancel any in-flight request
@@ -321,18 +343,21 @@ function MainApp() {
     const searchUuid = nanoid();
 
     try {
+      const runtimeConfig: LlmRuntimeConfig = {
+        llmProvider: selectedProvider,
+        apiKey: useServerKey ? undefined : userApiKey.trim(),
+        useServerKey,
+        llmModel: useServerKey ? undefined : selectedModel,
+        baseUrl: useServerKey ? undefined : normalizedUserBaseUrl || undefined,
+        conversationHistory,
+        memoryTurns: effectiveMemoryTurns,
+      };
+
       await parseStreaming(
         controller,
         content,
         searchUuid,
-        {
-          llmProvider: selectedProvider,
-          apiKey: useServerKey ? undefined : userApiKey.trim(),
-          useServerKey,
-          llmModel: useServerKey ? undefined : selectedModel,
-          conversationHistory,
-          memoryTurns: effectiveMemoryTurns,
-        },
+        runtimeConfig,
         // onSources — called once the sources JSON is received
         (sources) => {
           updateChatMessages(targetChatId, (prev) =>
@@ -418,6 +443,10 @@ function MainApp() {
     }
     if (!isUserApiKeyStructurallyValid) {
       setLlmConfigError(`Your ${selectedProvider} API key format looks invalid. Please check and try again.`);
+      return;
+    }
+    if (!isUserBaseUrlStructurallyValid) {
+      setLlmConfigError(`Your ${selectedProvider} base URL format looks invalid. Please enter a valid http(s) URL or leave it blank.`);
       return;
     }
     setUseServerKey(false);
@@ -691,6 +720,38 @@ function MainApp() {
               </div>
 
               <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Base URL (optional)</label>
+                <input
+                  type="url"
+                  value={userBaseUrlByProvider[selectedProvider]}
+                  onChange={(e) =>
+                    setUserBaseUrlByProvider((prev) => ({
+                      ...prev,
+                      [selectedProvider]: e.target.value,
+                    }))
+                  }
+                  placeholder={
+                    selectedProvider === 'openai'
+                      ? 'https://api.chatanywhere.org'
+                      : 'https://api.deepseek.com'
+                  }
+                  disabled={!isUserApiKeyStructurallyValid}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 ${
+                    !isUserApiKeyStructurallyValid
+                      ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                      : isUserBaseUrlStructurallyValid
+                        ? 'border-gray-300 bg-white text-gray-900'
+                        : 'border-red-300 bg-white text-gray-900'
+                  }`}
+                />
+                <p className={`mt-1 text-xs ${isUserBaseUrlStructurallyValid ? 'text-gray-500' : 'text-red-600'}`}>
+                  {!isUserApiKeyStructurallyValid
+                    ? 'Enter a valid API key first to unlock endpoint selection.'
+                    : 'Leave blank to use ECEasy defaults. Enter a valid http(s) endpoint if you want to override the provider URL.'}
+                </p>
+              </div>
+
+              <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
                 <select
                   value={isUserApiKeyStructurallyValid ? selectedModel : serverFixedModel}
@@ -747,7 +808,7 @@ function MainApp() {
                       className="w-full accent-gray-300 cursor-not-allowed"
                     />
                     <div className="mt-1 text-xs text-gray-500">
-                      Using fixed server memory: last {SERVER_FIXED_MEMORY_TURNS} turns. Enter a valid key to customize 0-{MAX_USER_MEMORY_TURNS}.
+                      Using fixed server memory: last {SERVER_FIXED_MEMORY_TURNS} turns. The shared key may trim history further to stay under its ~4096-token free limit. Enter a valid key to customize 0-{MAX_USER_MEMORY_TURNS}.
                     </div>
                   </>
                 )}
@@ -780,9 +841,9 @@ function MainApp() {
               </button>
               <button
                 onClick={confirmUseOwnKey}
-                disabled={!isUserApiKeyStructurallyValid}
+                disabled={!isUserApiKeyStructurallyValid || !isUserBaseUrlStructurallyValid}
                 className={`px-4 py-2 rounded-lg text-white text-sm ${
-                  isUserApiKeyStructurallyValid
+                  isUserApiKeyStructurallyValid && isUserBaseUrlStructurallyValid
                     ? 'bg-amber-600 hover:bg-amber-700'
                     : 'bg-amber-300 cursor-not-allowed'
                 }`}

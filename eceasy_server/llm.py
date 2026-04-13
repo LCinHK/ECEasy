@@ -34,6 +34,17 @@ DEFAULT_USER_MODEL_BY_PROVIDER = {
 }
 
 
+def _resolve_provider_base_url(provider: str, request: QueryRequest, using_server_key: bool) -> str:
+    if using_server_key:
+        return OPENAI_BASE_URL if provider == "openai" else DEEPSEEK_BASE_URL
+
+    requested_base_url = request.base_url
+    if requested_base_url is not None:
+        return str(requested_base_url).rstrip("/")
+
+    return OPENAI_BASE_URL if provider == "openai" else DEEPSEEK_BASE_URL
+
+
 def _resolve_remote_model_name(provider: str, request: QueryRequest, using_server_key: bool) -> str:
     if using_server_key:
         # Server-key mode is always controlled by backend env config.
@@ -84,12 +95,12 @@ def resolve_runtime_llm_config(request: QueryRequest) -> tuple[openai.OpenAI, st
         api_key = OPENAI_API_KEY if using_server_key else user_api_key
         if not api_key:
             raise HTTPException(status_code=400, detail="OpenAI API key is required for the selected mode.")
-        client = openai.OpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
+        client = openai.OpenAI(api_key=api_key, base_url=_resolve_provider_base_url(provider, request, using_server_key))
     else:
         api_key = DEEPSEEK_API_KEY if using_server_key else user_api_key
         if not api_key:
             raise HTTPException(status_code=400, detail="DeepSeek API key is required for the selected mode.")
-        client = openai.OpenAI(api_key=api_key, base_url=DEEPSEEK_BASE_URL)
+        client = openai.OpenAI(api_key=api_key, base_url=_resolve_provider_base_url(provider, request, using_server_key))
 
     model_name = _resolve_remote_model_name(provider, request, using_server_key)
     return client, provider, model_name, using_server_key
