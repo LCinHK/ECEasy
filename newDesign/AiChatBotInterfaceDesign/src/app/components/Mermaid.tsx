@@ -12,75 +12,138 @@ interface MermaidProps {
   chart: string;
 }
 
-/**
- * Mermaid's parser treats bare parentheses, ampersands, and similar
- * characters as syntax tokens inside node labels.  Any label that is
- * not already wrapped in double-quotes and contains one of those
- * characters will cause a parse error.
- *
- * This function walks every node-label bracket pair and, when the
- * content is unquoted and contains a special character, wraps it in
- * double-quotes (escaping any pre-existing double-quotes inside).
- *
- * Bracket pairs handled:
- *   [text]   – rectangle
- *   (text)   – rounded rectangle  ← most common source of the bug
- *   {text}   – diamond
- *   ((text)) – circle
- *   ([text]) – stadium (cylinder)
- *   {{text}} – hexagon
- *   >text]   – asymmetric
- */
 function sanitizeMermaid(source: string): string {
-  // 1. Normalise Unicode look-alike hyphens/dashes to plain ASCII hyphens
-  //    (e.g. U+2011 NON-BREAKING HYPHEN, U+2013 EN DASH, U+2014 EM DASH)
   let out = source.replace(/[\u2010-\u2015\u2212]/g, '-');
 
-  // 2. Quote unquoted labels that contain special characters.
-  //    We match each bracket style separately so we can handle nested
-  //    delimiters correctly.
-  //
-  //    Pattern anatomy:
-  //      (open)        – opening delimiter literal
-  //      ("(?:[^"\\]|\\.)*")   – already-quoted string → leave alone
-  //      |([^)\]}>]+)  – unquoted text → candidate for quoting
-  //      (close)       – closing delimiter literal
-  //
-  //    Special chars that break Mermaid without quotes:
-  //      ( ) & ; # , | > < { }
-  const NEEDS_QUOTING = /[()&;#,|><{}]/;
+  const needsQuoting = /[()&;#,|><{}\[\]`]/;
 
-  const quoteLabel = (label: string): string => {
-    // Already quoted — strip outer quotes, escape inner ones, re-quote
-    if (label.startsWith('"') && label.endsWith('"')) return label;
-    if (NEEDS_QUOTING.test(label)) {
-      const escaped = label.replace(/"/g, '\\"');
-      return `"${escaped}"`;
+  const isQuoted = (text: string): boolean => {
+    const trimmed = text.trim();
+    return trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"');
+  };
+
+  const normalizeLabelLineBreaks = (text: string): string => text.replace(/\\r?\\n/g, '<br/>').replace(/\r?\n/g, '<br/>');
+
+  const sanitizeLabel = (raw: string): string => {
+    const trimmed = raw.trim();
+    if (!trimmed) return raw;
+
+    // Preserve quoted labels, only normalize line-break markers inside.
+    if (isQuoted(trimmed)) {
+      const inner = trimmed.slice(1, -1);
+      return `"${normalizeLabelLineBreaks(inner)}"`;
     }
-    return label;
+
+    const withBreaks = normalizeLabelLineBreaks(trimmed);
+    if (needsQuoting.test(withBreaks) || withBreaks.includes('<br/>')) {
+      return `"${withBreaks.replace(/"/g, '\\"')}"`;
+    }
+
+    return withBreaks;
   };
 
-  // Helper: replace label inside a bracket pair
-  const replacePair = (open: string, close: string): void => {
-    // Escape special regex chars in the delimiter strings
-    const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const re = new RegExp(`${esc(open)}((?:"(?:[^"\\\\]|\\\\.)*"|[^${esc(close[0])}])*)${esc(close)}`, 'g');
-    out = out.replace(re, (_match, inner) => `${open}${quoteLabel(inner)}${close}`);
+  const isNodeLabelStart = (text: string, idx: number): boolean => {
+    if (idx <= 0) return false;
+    const prev = text[idx - 1];
+    return /[A-Za-z0-9_\])}]/.test(prev);
   };
 
-  // Order matters: longer/compound delimiters first
-  replacePair('((',  '))');
-  replacePair('([',  '])');
-  replacePair('{{',  '}}');
-  replacePair('[',   ']');
-  replacePair('(',   ')');
-  replacePair('{',   '}');
+  const replacePair = (input: string, open: string, close: string): string => {
+    let result = '';
+    let i = 0;
 
-  // >text]  asymmetric node — inner text ends before ]
-  // >text]  asymmetric node — use RegExp constructor to avoid linter noise on the ] escape
-  out = out.replace(new RegExp('>([^\\[\\]]*)]', 'g'), (_match, inner) => `>${quoteLabel(inner)}]`);
+    while (i < input.length) {
+      if (input.startsWith(open, i) && isNodeLabelStart(input, i)) {
+        const start = i + open.length;
+        let j = start;
+        let depth = 1;
+        let inQuote = false;
+        let escaped = false;
+
+        while (j < input.length) {
+          const ch = input[j];
+
+          if (inQuote) {
+            if (escaped) {
+              escaped = false;
+            } else if (ch === '\\') {
+              escaped = true;
+            } else if (ch === '"') {
+              inQuote = false;
+            }
+            j += 1;
+            continue;
+          }
+
+          if (ch === '"') {
+            inQuote = true;
+            j += 1;
+            continue;
+          }
+
+          if (input.startsWith(open, j)) {
+            depth += 1;
+            j += open.length;
+            continue;
+          }
+
+          if (input.startsWith(close, j)) {
+            depth -= 1;
+            if (depth === 0) break;
+            j += close.length;
+            continue;
+          }
+
+          j += 1;
+        }
+
+        if (j < input.length) {
+          const inner = input.slice(start, j);
+          result += `${open}${sanitizeLabel(inner)}${close}`;
+          i = j + close.length;
+          continue;
+        }
+      }
+
+      result += input[i];
+      i += 1;
+    }
+
+    return result;
+  };
+
+  // Longer delimiters first.
+  out = replacePair(out, '((', '))');
+  out = replacePair(out, '([', '])');
+  out = replacePair(out, '{{', '}}');
+  out = replacePair(out, '[', ']');
+  out = replacePair(out, '(', ')');
+  out = replacePair(out, '{', '}');
+
+  // Asymmetric node: A>Label]
+  out = out.replace(/([A-Za-z0-9_]+)>([^\[\]]*?)]/g, (_m, node, rawLabel) => `${node}>${sanitizeLabel(rawLabel)}]`);
 
   return out;
+}
+
+// Conservative fallback sanitizer used only if raw+primary sanitizer fail.
+// It focuses on common flowchart node shapes and avoids deep structural rewrites.
+function sanitizeMermaidFallback(source: string): string {
+  const normalizeLabel = (raw: string): string => {
+    const trimmed = raw.trim();
+    if (!trimmed) return raw;
+
+    const normalizeBreaks = (text: string) => text.replace(/\\r?\\n/g, '<br/>').replace(/\r?\n/g, '<br/>');
+    const isQuoted = trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"');
+    const body = isQuoted ? trimmed.slice(1, -1) : trimmed;
+    return `"${normalizeBreaks(body).replace(/"/g, '\\"')}"`;
+  };
+
+  return source
+    .replace(/[\u2010-\u2015\u2212]/g, '-')
+    .replace(/\[([^\]\n]*)]/g, (_m, inner) => `[${normalizeLabel(inner)}]`)
+    .replace(/\{([^}\n]*)}/g, (_m, inner) => `{${normalizeLabel(inner)}}`)
+    .replace(/([A-Za-z0-9_]+)>([^\[\]\n]*?)]/g, (_m, node, inner) => `${node}>${normalizeLabel(inner)}]`);
 }
 
 export default function Mermaid({ chart }: MermaidProps) {
@@ -94,14 +157,34 @@ export default function Mermaid({ chart }: MermaidProps) {
     let cancelled = false;
 
     const render = async () => {
-      try {
-        const sanitized = sanitizeMermaid(chart.trim());
-        // mermaid.render() returns { svg, bindFunctions }
-        const { svg, bindFunctions } = await mermaid.render(`mermaid-${id}`, sanitized);
+      const tryRender = async (candidate: string) => {
+        const { svg, bindFunctions } = await mermaid.render(`mermaid-${id}`, candidate);
         if (cancelled || !containerRef.current) return;
         containerRef.current.innerHTML = svg;
         bindFunctions?.(containerRef.current);
         setError(null);
+      };
+
+      try {
+        const raw = chart.trim();
+        // 1) raw chart first; 2) primary sanitizer; 3) conservative fallback sanitizer
+        try {
+          await tryRender(raw);
+          return;
+        } catch {
+          // continue to sanitizer strategies
+        }
+
+        const sanitized = sanitizeMermaid(raw);
+        try {
+          await tryRender(sanitized);
+          return;
+        } catch {
+          // continue to fallback sanitizer
+        }
+
+        const fallbackSanitized = sanitizeMermaidFallback(raw);
+        await tryRender(fallbackSanitized);
       } catch (err: any) {
         if (!cancelled) {
           setError(err?.message ?? 'Failed to render diagram.');

@@ -14,6 +14,7 @@ import {
   PopoverTrigger,
 } from '@/app/components/ui/popover';
 import { ImageWithFallback } from '@/app/components/figma/ImageWithFallback';
+import Mermaid from '@/app/components/Mermaid';
 import { normalizeAssistantContent } from '@/app/utils/assistant-content';
 import type { Source, Relate, SuggestedImage } from '@/app/utils/parse-streaming';
 
@@ -261,11 +262,17 @@ export function ChatMessage({
                     // Syntax-highlighted code blocks
                     code({ node, inline, className, children, ...props }: any) {
                       const match = /language-(\w+)/.exec(className || '');
+                      const language = (match?.[1] ?? '').toLowerCase();
+
+                      if (!inline && language === 'mermaid') {
+                        return <Mermaid chart={String(children).replace(/\n$/, '')} />;
+                      }
+
                       return !inline && match ? (
                         <SyntaxHighlighter
                           style={dracula}
                           PreTag="div"
-                          language={match[1]}
+                          language={language || match[1]}
                           {...props}
                         >
                           {String(children).replace(/\n$/, '')}
