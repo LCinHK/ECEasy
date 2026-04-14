@@ -124,6 +124,46 @@ python dump_cached_stream.py --key <search_uuid> --out raw_stream.txt
 
 ---
 
+### 5. `check_course_facts.py`
+Manual factual regression check for high-risk course identity questions.
+
+This script is **test-only**. It does **not** hardcode answers into the chatbot runtime. Instead, it verifies that the current retrieval path still behaves correctly for a few known-failure cases.
+
+**What it checks right now:**
+- `ELEC3130` resolves to the official title `Digital Image Processing`
+- `ELEC2200` falls back to a verification note if no current official syllabus source is available
+- The retrieval path does not prefer outdated or secondary sources for these direct course-code questions
+
+**Usage:**
+```powershell
+python check_course_facts.py
+```
+
+**When to use:**
+- After changing ingestion, reranking, or prompt rules
+- After noticing a course-code factual error in chat output
+- Before committing changes that affect course identity or prerequisites
+
+---
+
+### 6. `check_course_fact_risks.py`
+Broader factual-risk inspection for course-code queries.
+
+**What it shows:**
+- Which retrieved contexts are potentially risky because they come from secondary sources or ambiguous course-code mentions
+- Whether the official-code guardrail is still working
+
+**Usage:**
+```powershell
+python check_course_fact_risks.py
+```
+
+**When to use:**
+- After re-ingesting `ECEknowledge`
+- When a query returns a plausible but wrong course identity / prerequisite / offering statement
+
+---
+
 ## Quick Start
 
 After ingesting ECEknowledge with `ingest_university.py`:
@@ -143,6 +183,10 @@ python query_debug.py
 
 # 4. Test custom queries
 python query_debug.py --queries "ELEC1100" "COMP2011" "Dorm application"
+
+# 5. Check known factual regressions
+python check_course_facts.py
+python check_course_fact_risks.py
 ```
 
 ---
@@ -183,6 +227,14 @@ For course-code queries like "ELEC1100":
 - **Small boost** (-0.05): If department matches
 
 Lower reranked score = higher rank in final results.
+
+### Factual Regression Checks
+If you spot a similar factual error:
+1. Add the query to `check_course_facts.py` if it is a direct course-identity question.
+2. Add it to `check_course_fact_risks.py` if you want to inspect the retrieved contexts and why they look risky.
+3. Re-run the scripts after ingestion or retrieval changes.
+
+Keep the checks narrow and source-based. The goal is to catch regressions, not to hardcode all course facts into runtime code.
 
 ---
 

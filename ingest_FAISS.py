@@ -48,6 +48,8 @@ TEXT_EXTENSIONS = {".txt", ".md", ".csv"}
 # Supports patterns like: COMP2011, COMP 2011, COMP-2011, COMP2011_Spring2025-26
 COURSE_CODE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)(?![A-Za-z0-9])")
 URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
+COURSE_CODE_LINE_RE = re.compile(r"(?:^|\n)\s*##\s*Course\s*Code\s*\n+\s*([A-Za-z]{4}\s*[-_]?\s*\d{4}[A-Za-z]?)", re.IGNORECASE)
+COURSE_HEADER_RE = re.compile(r"(?:^|\n)\s*#\s*([A-Za-z]{4}\s*[-_]?\s*\d{4}[A-Za-z]?)\b")
 
 
 def _normalize_course_code(raw: str) -> str:
@@ -63,6 +65,44 @@ def _extract_course_code(text: str) -> str:
     if not m:
         return ""
     return f"{m.group(1).upper()}{m.group(2).upper()}"
+
+
+def _extract_all_course_codes(text: str) -> list[str]:
+    codes = []
+    seen = set()
+    for m in COURSE_CODE_RE.finditer(text or ""):
+        code = f"{m.group(1).upper()}{m.group(2).upper()}"
+        if code in seen:
+            continue
+        seen.add(code)
+        codes.append(code)
+    return codes
+
+
+def _extract_confident_course_code(chunk_text: str) -> str:
+    """
+    Extract a course code only when it appears in explicit course-identity markers.
+    This avoids assigning wrong codes from prerequisite/exclusion lines.
+    """
+    text = chunk_text or ""
+
+    labeled = [
+        _normalize_course_code(m.group(1))
+        for m in COURSE_CODE_LINE_RE.finditer(text)
+        if _normalize_course_code(m.group(1))
+    ]
+    if len(set(labeled)) == 1:
+        return labeled[0]
+
+    headers = [
+        _normalize_course_code(m.group(1))
+        for m in COURSE_HEADER_RE.finditer(text[:1200])
+        if _normalize_course_code(m.group(1))
+    ]
+    if len(set(headers)) == 1:
+        return headers[0]
+
+    return ""
 
 
 def _should_skip_file(file_path: Path) -> bool:
@@ -156,6 +196,16 @@ def _extract_structured_metadata(file_path: Path, data_path: Path) -> dict:
     elif section == "ust_ranking":
         source_origin = "ust_rankings"
 
+    stem_lower = file_path.stem.lower()
+    is_aggregated_syllabus = (
+        file_path.suffix.lower() == ".docx"
+        and "syllabus" in stem_lower
+        and not course_code
+    )
+    source_quality = "aggregate_low_trust" if is_aggregated_syllabus else "high"
+
+    course_code_confidence = "high" if course_code else "none"
+
     return {
         "source_relpath": rel_posix,
         "source_name": file_path.name,
@@ -166,6 +216,9 @@ def _extract_structured_metadata(file_path: Path, data_path: Path) -> dict:
         "doc_type": _detect_doc_type(rel_path),
         "department": dept,
         "course_code": course_code,
+        "course_code_confidence": course_code_confidence,
+        "is_aggregated_syllabus": is_aggregated_syllabus,
+        "source_quality": source_quality,
     }
 
 
@@ -467,9 +520,17 @@ def main():
         chunk.metadata["chunk_total"] = len(chunks)
 
         if not chunk.metadata.get("course_code"):
-            inferred = _extract_course_code(chunk.page_content[:1000])
+            inferred = _extract_confident_course_code(chunk.page_content[:1500])
             if inferred:
-                chunk.metadata["course_code"] = _normalize_course_code(inferred)
+                chunk.metadata["course_code"] = inferred
+                chunk.metadata["course_code_confidence"] = "inferred_heading"
+
+        # Guardrail: if chunk mentions multiple different course codes, avoid overconfident tagging.
+        all_codes = _extract_all_course_codes(chunk.page_content[:2000])
+        current_code = _normalize_course_code(str(chunk.metadata.get("course_code", "")))
+        if current_code and len(all_codes) >= 2 and current_code not in all_codes[:1]:
+            chunk.metadata["course_code"] = ""
+            chunk.metadata["course_code_confidence"] = "ambiguous"
 
         if PREPEND_METADATA_TO_CHUNK_TEXT:
             header_parts = []
@@ -480,6 +541,8 @@ def main():
             sec = chunk.metadata.get("knowledge_section", "")
             sub = chunk.metadata.get("knowledge_subsection", "")
             origin = chunk.metadata.get("source_origin", "")
+            quality = chunk.metadata.get("source_quality", "")
+            cc_conf = chunk.metadata.get("course_code_confidence", "")
             if cc:
                 header_parts.append(f"COURSE_CODE={cc}")
             if dep:
@@ -488,6 +551,10 @@ def main():
                 header_parts.append(f"DOC_TYPE={dt}")
             if origin:
                 header_parts.append(f"ORIGIN={origin}")
+            if quality:
+                header_parts.append(f"SOURCE_QUALITY={quality}")
+            if cc_conf:
+                header_parts.append(f"COURSE_CODE_CONFIDENCE={cc_conf}")
             if src:
                 header_parts.append(f"SOURCE={src}")
             if sec:
