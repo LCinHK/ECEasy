@@ -26,7 +26,7 @@ const OPENAI_MODELS = [
   'gpt-5-nano',
 ] as const;
 
-const DEEPSEEK_MODELS = ['deepseek-r1', 'deepseek-v3', 'deepseek-v3-2-exp'] as const;
+const DEEPSEEK_MODELS = ['deepseek-chat', 'deepseek-reasoner'] as const;
 
 const getModelsForProvider = (provider: UserLlmProvider): readonly string[] =>
   provider === 'openai' ? OPENAI_MODELS : DEEPSEEK_MODELS;

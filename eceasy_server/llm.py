@@ -27,10 +27,10 @@ OPENAI_ALLOWED_MODELS = {
     "gpt-5-mini",
     "gpt-5-nano",
 }
-DEEPSEEK_ALLOWED_MODELS = {"deepseek-r1", "deepseek-v3", "deepseek-v3-2-exp"}
+DEEPSEEK_ALLOWED_MODELS = {"deepseek-chat","deepseek-reasoner"}
 DEFAULT_USER_MODEL_BY_PROVIDER = {
     "openai": "gpt-5-mini",
-    "deepseek": "deepseek-v3",
+    "deepseek": "deepseek-chat",
 }
 
 
