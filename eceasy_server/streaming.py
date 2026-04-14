@@ -9,8 +9,8 @@ import openai
 from loguru import logger
 
 import ecEasyPrompts
-from .config import KV_NAME, REFERENCE_COUNT, SHOULD_DO_RELATED_QUESTIONS, STOP_WORDS
-from .retrieval import get_rag_context, get_related_questions, search_with_duckduckgo
+from .config import KV_NAME, SHOULD_DO_RELATED_QUESTIONS, STOP_WORDS, resolve_reference_count
+from .retrieval import get_rag_context_with_limit, get_related_questions, search_with_duckduckgo
 
 SERVER_FIXED_MEMORY_TURNS = 3
 MAX_MEMORY_TURNS = 15
@@ -161,23 +161,24 @@ def stream_response(
     image_retriever: Optional[object] = None,
     image_suggester: Optional[Callable[[str, str, object], List[dict]]] = None,
 ) -> Generator[str, None, None]:
+    reference_count = resolve_reference_count(query)
     contexts = []
 
     try:
-        rag_contexts = get_rag_context(query)
+        rag_contexts = get_rag_context_with_limit(query, reference_count)
         logger.info(f"RAG found {len(rag_contexts)} contexts")
         contexts.extend(rag_contexts)
     except Exception as e:
         logger.error(f"RAG error: {e}")
 
-    if len(contexts) < REFERENCE_COUNT:
+    if len(contexts) < reference_count:
         try:
-            web_results = search_with_duckduckgo(query)
+            web_results = search_with_duckduckgo(query, max_results=reference_count)
             contexts.extend(web_results)
         except Exception as e:
             logger.error(f"Web search error: {e}")
 
-    contexts = contexts[:REFERENCE_COUNT]
+    contexts = contexts[:reference_count]
 
     yield json.dumps(contexts)
     yield "\n\n__LLM_RESPONSE__\n\n"

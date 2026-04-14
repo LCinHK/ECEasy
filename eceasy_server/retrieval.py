@@ -7,7 +7,7 @@ import openai
 from loguru import logger
 
 import ecEasyPrompts
-from .config import KNOWLEDGE, REFERENCE_COUNT
+from .config import KNOWLEDGE
 
 try:
     try:
@@ -26,7 +26,7 @@ if KNOWLEDGE == "faiss":
     except ImportError as e:
         logger.warning(f"Could not import faiss_rag: {e}. RAG functionality will be disabled.")
 
-        def get_rag_context(_: str) -> list:
+        def get_rag_context(_: str, k: int | None = None) -> list:
             return []
 else:
     try:
@@ -35,20 +35,31 @@ else:
     except ImportError as e:
         logger.warning(f"Could not import arag.arag: {e}. RAG functionality will be disabled.")
 
-        def get_rag_context(_: str) -> list:
+        def get_rag_context(_: str, k: int | None = None) -> list:
             return []
 
 
-def search_with_duckduckgo(query: str) -> List[dict]:
+def get_rag_context_with_limit(query: str, k: int) -> List[dict]:
+    safe_k = max(1, int(k))
+    try:
+        return get_rag_context(query, k=safe_k)
+    except TypeError:
+        # Backward compatibility for providers that don't accept k.
+        return get_rag_context(query)
+
+
+def search_with_duckduckgo(query: str, max_results: int) -> List[dict]:
     if not DDGS:
         return []
+
+    safe_max_results = max(1, int(max_results))
 
     try:
         results = []
         for attempt in range(3):
             try:
                 with DDGS() as ddgs:
-                    ddgs_gen = ddgs.text(query, max_results=REFERENCE_COUNT)
+                    ddgs_gen = ddgs.text(query, max_results=safe_max_results)
                     if ddgs_gen:
                         results = list(ddgs_gen)
                         if results:

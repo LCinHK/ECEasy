@@ -47,6 +47,7 @@ TEXT_EXTENSIONS = {".txt", ".md", ".csv"}
 
 # Supports patterns like: COMP2011, COMP 2011, COMP-2011, COMP2011_Spring2025-26
 COURSE_CODE_RE = re.compile(r"(?<![A-Za-z0-9])([A-Za-z]{4})\s*[-_]?\s*(\d{4}[A-Za-z]?)(?![A-Za-z0-9])")
+URL_RE = re.compile(r"https?://[^\s\"'<>]+", re.IGNORECASE)
 
 
 def _normalize_course_code(raw: str) -> str:
@@ -173,6 +174,23 @@ def _load_html_as_document(html_path: Path) -> list[Document]:
     raw = html_path.read_text(encoding="utf-8", errors="ignore")
     soup = BeautifulSoup(raw, "html.parser")
 
+    original_url = ""
+    # Prefer explicit URL in HTML comments, commonly used in saved pages as provenance.
+    comment_blocks = re.findall(r"<!--(.*?)-->", raw, flags=re.DOTALL)
+    for block in comment_blocks:
+        m = URL_RE.search(block)
+        if m:
+            original_url = m.group(0).strip()
+            break
+    if not original_url:
+        canonical = soup.find("link", rel=lambda x: x and "canonical" in str(x).lower())
+        if canonical and canonical.get("href"):
+            original_url = str(canonical.get("href")).strip()
+    if not original_url:
+        meta_og = soup.find("meta", attrs={"property": "og:url"})
+        if meta_og and meta_og.get("content"):
+            original_url = str(meta_og.get("content")).strip()
+
     for tag in soup(["script", "style", "noscript", "svg"]):
         tag.decompose()
 
@@ -193,7 +211,12 @@ def _load_html_as_document(html_path: Path) -> list[Document]:
         cleaned_lines.insert(0, f"Title: {title}")
 
     cleaned_text = "\n".join(cleaned_lines)
-    return [Document(page_content=cleaned_text, metadata={"title": title} if title else {})]
+    metadata = {}
+    if title:
+        metadata["title"] = title
+    if original_url:
+        metadata["original_url"] = original_url
+    return [Document(page_content=cleaned_text, metadata=metadata)]
 
 
 def _load_plain_text_file(path: Path) -> list[Document]:

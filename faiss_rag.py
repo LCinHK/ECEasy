@@ -141,7 +141,7 @@ except Exception as e:
     print(f"[WARNING] Could not load FAISS index: {e}. FAISS RAG will be disabled.")
 
 
-def get_rag_context(query: str):
+def get_rag_context(query: str, k: int | None = None):
     """
     Retrieve relevant document chunks from the FAISS index for the given query.
     Returns a list of context dicts compatible with the server's streaming pipeline:
@@ -154,8 +154,10 @@ def get_rag_context(query: str):
     query_course_code = _normalize_course_code(query_course_code) if query_course_code else ""
 
     try:
+        final_k = max(1, int(k)) if k is not None else FAISS_FINAL_K
+        candidate_k = max(FAISS_CANDIDATE_K, final_k)
         # similarity_search_with_score returns (Document, score) tuples
-        retrieved = _vectorstore.similarity_search_with_score(query, k=max(FAISS_CANDIDATE_K, FAISS_FINAL_K))
+        retrieved = _vectorstore.similarity_search_with_score(query, k=candidate_k)
     except Exception as e:
         logger.error(f"[FAISS RAG] Search failed: {e}")
         return []
@@ -192,13 +194,13 @@ def get_rag_context(query: str):
     print(f"[FAISS RAG Debug] Query: {query}")
     if query_course_code:
         print(f"[FAISS RAG Debug] Detected course code: {query_course_code}")
-    for doc, raw_score, rerank_score in reranked[:FAISS_FINAL_K]:
+    for doc, raw_score, rerank_score in reranked[:final_k]:
         meta = doc.metadata or {}
         cc = meta.get("course_code", "")
         print(f"[FAISS RAG Debug] raw={raw_score:.4f}, rerank={rerank_score:.4f}, cc={cc} | {doc.page_content[:60]}...")
 
     context = []
-    for doc, _, score in reranked[:FAISS_FINAL_K]:
+    for doc, _, score in reranked[:final_k]:
         if score >= threshold:
             continue  # Too dissimilar — skip
 
@@ -208,6 +210,7 @@ def get_rag_context(query: str):
 
         source_relpath = _infer_source_relpath(file_path, metadata)
         encoded_relpath = quote(source_relpath, safe="/") if source_relpath else ""
+        original_url = str(metadata.get("original_url", "")).strip()
 
         if "page" in metadata:
             # page is 0-indexed in LangChain loaders
@@ -227,11 +230,12 @@ def get_rag_context(query: str):
 
         resource_url = f"/resource/ECEknowledge/{encoded_relpath}{url_suffix}" if encoded_relpath else "#"
         direct_url = f"/ECEknowledge/{encoded_relpath}{url_suffix}" if encoded_relpath else "#"
+        citation_url = original_url if original_url else resource_url
 
         context.append({
             "name": name,
             "snippet": doc.page_content,
-            "url": resource_url,
+            "url": citation_url,
             "direct_url": direct_url,
             "source_relpath": source_relpath,
         })

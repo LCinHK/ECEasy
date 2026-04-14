@@ -29,7 +29,11 @@ LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "ollama").lower()
 
 # --- Feature Flags ---
 KV_NAME = os.environ.get("KV_NAME", "eceasy-chat-local.kv")
-REFERENCE_COUNT = 8
+REFERENCE_COUNT_MIN = int(os.environ.get("REFERENCE_COUNT_MIN", "4"))
+REFERENCE_COUNT_MAX = int(os.environ.get("REFERENCE_COUNT_MAX", "10"))
+REFERENCE_COUNT_DEFAULT = int(
+    os.environ.get("REFERENCE_COUNT_DEFAULT", str((REFERENCE_COUNT_MIN + REFERENCE_COUNT_MAX) // 2))
+)
 SHOULD_DO_RELATED_QUESTIONS = os.environ.get("RELATED_QUESTIONS", "true").lower() == "true"
 
 # --- Provider Specific Config ---
@@ -50,6 +54,55 @@ STOP_WORDS = [
     "\nReferences:\n",
     "\nSources:\n",
 ]
+
+
+def resolve_reference_count(query: str) -> int:
+    default_count = max(REFERENCE_COUNT_MIN, min(REFERENCE_COUNT_MAX, REFERENCE_COUNT_DEFAULT))
+
+    text = (query or "").strip()
+    if not text:
+        return default_count
+
+    score_delta = 0
+    lowered = text.lower()
+
+    # Longer, multi-part questions usually benefit from broader context retrieval.
+    if len(text) >= 90:
+        score_delta += 2
+    elif len(text) >= 45:
+        score_delta += 1
+    elif len(text) <= 18:
+        score_delta -= 2
+    elif len(text) <= 32:
+        score_delta -= 1
+
+    complexity_keywords = (
+        "compare",
+        "difference",
+        "plan",
+        "pathway",
+        "roadmap",
+        "requirements",
+        "prerequisite",
+        "elective",
+        "internship",
+        "exchange",
+        "fyp",
+        "thesis",
+    )
+    keyword_hits = sum(1 for kw in complexity_keywords if kw in lowered)
+    if keyword_hits >= 3:
+        score_delta += 2
+    elif keyword_hits >= 1:
+        score_delta += 1
+
+    # Multi-question prompts tend to need more evidence chunks.
+    question_marks = text.count("?") + text.count("？")
+    if question_marks >= 2:
+        score_delta += 1
+
+    target = default_count + score_delta
+    return max(REFERENCE_COUNT_MIN, min(REFERENCE_COUNT_MAX, target))
 
 
 def get_model_name_for_provider(provider: str) -> str:
