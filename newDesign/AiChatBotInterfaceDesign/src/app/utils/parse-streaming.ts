@@ -68,6 +68,7 @@ export interface ParsedStreamPayload {
 const LLM_SPLIT = '__LLM_RESPONSE__';
 const RELATED_SPLIT = '__RELATED_QUESTIONS__';
 const IMAGES_SPLIT = '__SUGGESTED_IMAGES__';
+const BACKEND_ERROR_PREFIX = '[Error generating response:';
 
 /**
  * Converts raw LLM markdown text with [[citation:N]] tokens into
@@ -79,6 +80,57 @@ export function markdownParse(text: string): string {
     .replace(/[cC]itation:(\d+)]]/g, 'citation:$1]')
     .replace(/\[\[([cC]itation:\d+)]](?!])/g, `[$1]`)
     .replace(/\[[cC]itation:(\d+)]/g, '[citation]($1)');
+}
+
+function buildFriendlyErrorMessage(rawErrorBlock: string): string {
+  const lower = rawErrorBlock.toLowerCase();
+  const statusMatch = rawErrorBlock.match(/status\s*=\s*(\d{3})/i);
+  const status = statusMatch?.[1] ? Number.parseInt(statusMatch[1], 10) : null;
+
+  if (status === 401 || status === 403 || lower.includes('unauthorized') || lower.includes('forbidden')) {
+    return 'Authentication failed. Please check your API key and endpoint settings in LLM Settings.';
+  }
+  if (status === 429 || lower.includes('rate limit') || lower.includes('too many requests')) {
+    return 'Rate limit reached. Please wait a moment and try again.';
+  }
+  if (
+    lower.includes('token') &&
+    (lower.includes('4096') || lower.includes('prompt') || lower.includes('too long') || lower.includes('maximum context'))
+  ) {
+    return 'Request exceeds token limit for this key/endpoint. Try a shorter prompt or reduce memory turns.';
+  }
+  if ([500, 502, 503, 504].includes(status ?? -1) || lower.includes('timeout')) {
+    return 'Model provider is temporarily unavailable. Please retry shortly.';
+  }
+  return 'Failed to generate response from the selected model provider. Please try again.';
+}
+
+function sanitizeBackendInlineError(rawMarkdown: string): string {
+  const start = rawMarkdown.indexOf(BACKEND_ERROR_PREFIX);
+  if (start < 0) return rawMarkdown;
+
+  const end = rawMarkdown.indexOf(']', start);
+  const safePrefix = rawMarkdown.slice(0, start).trimEnd();
+
+  // If the error block is still streaming and not closed, hide partial raw details.
+  if (end < 0) {
+    return safePrefix;
+  }
+
+  const errorBlock = rawMarkdown.slice(start, end + 1);
+  const suffix = rawMarkdown.slice(end + 1).trim();
+  const friendly = `**Request failed:** ${buildFriendlyErrorMessage(errorBlock)}`;
+
+  if (safePrefix && suffix) {
+    return `${safePrefix}\n\n${friendly}\n\n${suffix}`;
+  }
+  if (safePrefix) {
+    return `${safePrefix}\n\n${friendly}`;
+  }
+  if (suffix) {
+    return `${friendly}\n\n${suffix}`;
+  }
+  return friendly;
 }
 
 function safeJsonParse<T>(raw: string, fallback: T): T {
@@ -125,7 +177,7 @@ export function parseStreamPayload(raw: string): ParsedStreamPayload {
 
   const markdownEndCandidates = [relatedIndex, imagesIndex].filter((i) => i >= 0);
   const markdownEnd = markdownEndCandidates.length > 0 ? Math.min(...markdownEndCandidates) : llmPart.length;
-  const markdown = markdownParse(llmPart.slice(0, markdownEnd));
+  const markdown = markdownParse(sanitizeBackendInlineError(llmPart.slice(0, markdownEnd)));
 
   let relates: Relate[] = [];
   if (relatedIndex >= 0) {
@@ -196,11 +248,11 @@ export async function parseStreaming(
 
     if (cutMarkers.length > 0) {
       const md = raw.slice(0, Math.min(...cutMarkers));
-      onMarkdown(markdownParse(md));
+      onMarkdown(markdownParse(sanitizeBackendInlineError(md)));
       return;
     }
 
-    onMarkdown(markdownParse(raw));
+    onMarkdown(markdownParse(sanitizeBackendInlineError(raw)));
   };
 
   while (true) {
