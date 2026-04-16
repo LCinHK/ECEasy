@@ -25,7 +25,7 @@ const sampleImages: SuggestedImage[] = [
   },
 ];
 
-const sampleAssistantContent = `### Sample parser preview\n\n&lt;ul&gt;\n&lt;li&gt;The course is centered on weekly laboratories that introduce important concepts; preparing before each lab and finishing the writeups on time will directly improve your understanding and grade [[citation:2]].&lt;/li&gt;\n&lt;li&gt;Read the lab instructions and lecture notes before the session so you spend lab time experimenting and troubleshooting, not just reading.&lt;/li&gt;\n&lt;/ul&gt;\n\n&lt;p&gt;You should also check the course syllabus for the latest grading and attendance rules [[citation:1]].&lt;/p&gt;`;
+const sampleAssistantContent = `### Sample parser preview\n\n&lt;ul&gt;\n&lt;li&gt;The course is centered on weekly laboratories that introduce important concepts; preparing before each lab and finishing the writeups on time will directly improve your understanding and grade [[citation:2]].&lt;/li&gt;\n&lt;li&gt;Read the lab instructions and lecture notes before the session so you spend lab time experimenting and troubleshooting, not just reading.&lt;/li&gt;\n&lt;/ul&gt;\n\nInline math check: \\(E = mc^2\\).\n\nBlock math check:\n\\[\\n\\nabla \u00d7 \\mathbf{E} = -\\frac{\\partial \\mathbf{B}}{\\partial t}\\n\\]\n\n&lt;p&gt;You should also check the course syllabus for the latest grading and attendance rules [[citation:1]].&lt;/p&gt;`;
 
 export function DebugSamplePreview() {
   return (

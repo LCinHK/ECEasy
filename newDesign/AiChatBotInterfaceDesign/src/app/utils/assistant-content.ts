@@ -69,9 +69,32 @@ function normalizeWhitespace(text: string): string {
     .trim();
 }
 
+function normalizeLatexContent(math: string): string {
+  // Some providers escape LaTeX commands as \\alpha in plain text streams.
+  return math.replace(/\\\\([A-Za-z]+)/g, '\\$1').trim();
+}
+
+function normalizeLatexDelimiters(text: string): string {
+  let normalized = text;
+
+  // Support TeX-style delimiters from streamed output: \( ... \) and \[ ... \].
+  normalized = normalized.replace(/\\\[([\s\S]*?)\\]/g, (_match, inner: string) => {
+    const content = normalizeLatexContent(inner);
+    return content ? `\n$$\n${content}\n$$\n` : _match;
+  });
+
+  normalized = normalized.replace(/\\\(([\s\S]*?)\\\)/g, (_match, inner: string) => {
+    const content = normalizeLatexContent(inner);
+    return content ? `$${content}$` : _match;
+  });
+
+  return normalized;
+}
+
 export function normalizeAssistantContent(content: string): string {
   const decoded = decodeHtmlEntities(content);
-  const withChainOfThought = decoded
+  const withNormalizedLatex = normalizeLatexDelimiters(decoded);
+  const withChainOfThought = withNormalizedLatex
     .replace(/<think>/g, '<details><summary>=== Chain of Thought ===</summary>')
     .replace(/<\/think>/g, '</details>');
 
@@ -82,6 +105,5 @@ export function normalizeAssistantContent(content: string): string {
 
   return normalizeWhitespace(normalized);
 }
-
 
 
