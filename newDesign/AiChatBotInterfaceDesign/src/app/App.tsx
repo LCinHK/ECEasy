@@ -1,201 +1,35 @@
-import { useState, useRef, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Menu } from 'lucide-react';
+import { nanoid } from 'nanoid';
+import logo from '../assets/icon.svg';
 import { Sidebar } from './components/Sidebar';
 import { ChatMessage } from './components/ChatMessage';
 import { DebugSamplePreview } from './components/DebugSamplePreview';
 import { DebugFixturePreview } from './components/DebugFixturePreview';
 import { MessageInput } from './components/MessageInput';
-import { Menu } from 'lucide-react';
-import logo from '../assets/icon.svg';
-import { nanoid } from 'nanoid';
+import { LlmSettingsModal } from './components/LlmSettingsModal';
+import {
+  CHAT_STATE_STORAGE_KEY,
+  GREETING_MESSAGE_TEXT,
+  createDefaultChatState,
+  createGreetingMessage,
+  loadInitialChatState,
+  syncThreadMeta,
+} from './utils/chat-state';
+import { initMatomoTracking } from './utils/matomo';
+import {
+  DEFAULT_BASE_URL_BY_PROVIDER,
+  MAX_USER_MEMORY_TURNS,
+  SERVER_FIXED_MEMORY_TURNS,
+  SERVER_MODEL_BY_PROVIDER,
+  getModelsForProvider,
+  isStructurallyValidApiKey,
+  isStructurallyValidBaseUrl,
+  type UserLlmProvider,
+} from './utils/llm-config';
 import { parseStreaming } from './utils/parse-streaming';
-import type { ConversationHistoryTurn, LlmRuntimeConfig, Source, Relate, SuggestedImage } from './utils/parse-streaming';
-
-type UserLlmProvider = 'openai' | 'deepseek';
-
-const OPENAI_MODELS = [
-  'gpt-5.2',
-  'gpt-5.1',
-  'gpt-5',
-  'gpt-4o',
-  'gpt-4.1',
-  'gpt-4o-mini',
-  'gpt-3.5-turbo',
-  'gpt-4.1-mini',
-  'gpt-4.1-nano',
-  'gpt-5-mini',
-  'gpt-5-nano',
-] as const;
-
-const DEEPSEEK_MODELS = ['deepseek-chat', 'deepseek-reasoner'] as const;
-
-const getModelsForProvider = (provider: UserLlmProvider): readonly string[] =>
-  provider === 'openai' ? OPENAI_MODELS : DEEPSEEK_MODELS;
-
-const SERVER_MODEL_BY_PROVIDER: Record<UserLlmProvider, string> = {
-  openai: 'gpt-5-mini',
-  deepseek: 'deepseek-chat',
-};
-
-const SERVER_FIXED_MEMORY_TURNS = 3;
-const MAX_USER_MEMORY_TURNS = 15;
-const GREETING_MESSAGE_TEXT = "Hello! I'm ECEasy, your HKUST ECE assistant. How can I help you today?";
-
-const API_KEY_PATTERN_BY_PROVIDER: Record<UserLlmProvider, RegExp> = {
-  openai: /^sk-[A-Za-z0-9_-]{16,}$/,
-  deepseek: /^sk-[A-Za-z0-9_-]{16,}$/,
-};
-
-const isStructurallyValidApiKey = (provider: UserLlmProvider, rawKey: string): boolean => {
-  const key = rawKey.trim();
-  if (!key) return false;
-  return API_KEY_PATTERN_BY_PROVIDER[provider].test(key);
-};
-
-const isStructurallyValidBaseUrl = (rawUrl: string): boolean => {
-  const value = rawUrl.trim();
-  if (!value) return true;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
-  } catch {
-    return false;
-  }
-};
-
-const DEFAULT_BASE_URL_BY_PROVIDER: Record<UserLlmProvider, string> = {
-  openai: '',
-  deepseek: '',
-};
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  sources?: Source[];
-  relates?: Relate[] | null;
-  suggestedImages?: SuggestedImage[];
-  isStreaming?: boolean;
-}
-
-interface ChatThread {
-  id: string;
-  title: string;
-  updatedAt: number;
-}
-
-interface ChatState {
-  threads: ChatThread[];
-  messagesById: Record<string, Message[]>;
-  currentChatId: string;
-}
-
-const CHAT_STATE_STORAGE_KEY = 'eceasy_chat_state_v1';
-
-const createGreetingMessage = (): Message => ({
-  id: nanoid(),
-  role: 'assistant',
-  content: GREETING_MESSAGE_TEXT,
-});
-
-const getChatTitle = (messages: Message[]): string => {
-  const firstUser = messages.find((m) => m.role === 'user' && m.content.trim().length > 0);
-  if (!firstUser) return 'New Chat session';
-  const normalized = firstUser.content.replace(/\s+/g, ' ').trim();
-  return normalized.length > 48 ? `${normalized.slice(0, 48)}...` : normalized;
-};
-
-const createThread = (id: string, messages: Message[], updatedAt = Date.now()): ChatThread => ({
-  id,
-  title: getChatTitle(messages),
-  updatedAt,
-});
-
-const createDefaultChatState = (): ChatState => {
-  const id = nanoid();
-  const starter = [createGreetingMessage()];
-  return {
-    threads: [createThread(id, starter)],
-    messagesById: { [id]: starter },
-    currentChatId: id,
-  };
-};
-
-const loadInitialChatState = (): ChatState => {
-  if (typeof window === 'undefined') return createDefaultChatState();
-
-  try {
-    const raw = window.localStorage.getItem(CHAT_STATE_STORAGE_KEY);
-    if (!raw) return createDefaultChatState();
-
-    const parsed = JSON.parse(raw) as Omit<Partial<ChatState>, 'threads'> & {
-      threads?: Array<Partial<ChatThread>>;
-      messagesById?: Record<string, Message[]>;
-      currentChatId?: string;
-    };
-    const messagesById = parsed.messagesById && typeof parsed.messagesById === 'object'
-      ? parsed.messagesById
-      : {};
-
-    const rawThreads = Array.isArray(parsed.threads) ? parsed.threads : [];
-    let threads: ChatThread[] = rawThreads
-      .map((t) => {
-        if (!t || typeof t.id !== 'string' || !t.id.trim()) return null;
-        const id = t.id;
-        return {
-          id,
-          title: typeof t.title === 'string' && t.title.trim() ? t.title : getChatTitle(messagesById[id] ?? []),
-          updatedAt:
-            typeof t.updatedAt === 'number' && Number.isFinite(t.updatedAt)
-              ? t.updatedAt
-              : Date.now(),
-        };
-      })
-      .filter((t): t is ChatThread => t !== null);
-    if (threads.length === 0) {
-      const ids = Object.keys(messagesById);
-      if (ids.length > 0) {
-        threads = ids.map((id) => createThread(id, messagesById[id] ?? []));
-      }
-    }
-
-    if (threads.length === 0) return createDefaultChatState();
-
-    const currentChatId =
-      parsed.currentChatId && threads.some((t) => t.id === parsed.currentChatId)
-        ? parsed.currentChatId
-        : threads[0].id;
-
-    const normalizedMessagesById = { ...messagesById };
-    for (const thread of threads) {
-      if (!Array.isArray(normalizedMessagesById[thread.id]) || normalizedMessagesById[thread.id].length === 0) {
-        normalizedMessagesById[thread.id] = [createGreetingMessage()];
-      }
-    }
-
-    return {
-      threads: threads.sort((a, b) => b.updatedAt - a.updatedAt),
-      messagesById: normalizedMessagesById,
-      currentChatId,
-    };
-  } catch {
-    return createDefaultChatState();
-  }
-};
-
-const syncThreadMeta = (threads: ChatThread[], chatId: string, messages: Message[]): ChatThread[] => {
-  const updatedAt = Date.now();
-  const title = getChatTitle(messages);
-  const existingIndex = threads.findIndex((t) => t.id === chatId);
-
-  let nextThreads: ChatThread[];
-  if (existingIndex >= 0) {
-    nextThreads = threads.map((t) => (t.id === chatId ? { ...t, title, updatedAt } : t));
-  } else {
-    nextThreads = [...threads, { id: chatId, title, updatedAt }];
-  }
-
-  return nextThreads.sort((a, b) => b.updatedAt - a.updatedAt);
-};
+import type { ConversationHistoryTurn, LlmRuntimeConfig } from './utils/parse-streaming';
+import type { ChatState, Message } from './types/chat';
 
 function MainApp() {
   const [chatState, setChatState] = useState<ChatState>(() => loadInitialChatState());
@@ -215,6 +49,7 @@ function MainApp() {
   const [userMemoryTurns, setUserMemoryTurns] = useState<number>(SERVER_FIXED_MEMORY_TURNS);
   const [pendingMessage, setPendingMessage] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
   // Keep a ref to the active AbortController so we can cancel if needed
   const abortRef = useRef<AbortController | null>(null);
   const activeStreamChatIdRef = useRef<string | null>(null);
@@ -253,6 +88,11 @@ function MainApp() {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(CHAT_STATE_STORAGE_KEY, JSON.stringify(chatState));
   }, [chatState]);
+
+  // Initialize Matomo once after app mount.
+  useEffect(() => {
+    initMatomoTracking();
+  }, []);
 
   // Mark the active streaming assistant reply as stopped.
   const stopActiveAssistantMessage = () => {
@@ -293,8 +133,8 @@ function MainApp() {
     setSelectedModel((prev) => (models.includes(prev) ? prev : models[0]));
   }, [selectedProvider, isUserApiKeyStructurallyValid, serverFixedModel]);
 
-  const buildConversationHistory = (messages: Message[], memoryTurns: number): ConversationHistoryTurn[] => {
-    const cleaned = messages
+  const buildConversationHistory = (messageList: Message[], memoryTurns: number): ConversationHistoryTurn[] => {
+    const cleaned = messageList
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .filter((m) => !m.isStreaming)
       .map((m) => ({ role: m.role, content: (m.content ?? '').trim() }))
@@ -361,13 +201,13 @@ function MainApp() {
         // onSources — called once the sources JSON is received
         (sources) => {
           updateChatMessages(targetChatId, (prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, sources } : m))
+            prev.map((m) => (m.id === assistantId ? { ...m, sources } : m)),
           );
         },
         // onMarkdown — called on every new chunk of LLM text
         (markdown) => {
           updateChatMessages(targetChatId, (prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, content: markdown } : m))
+            prev.map((m) => (m.id === assistantId ? { ...m, content: markdown } : m)),
           );
           scrollToBottom();
         },
@@ -375,15 +215,15 @@ function MainApp() {
         (relates) => {
           updateChatMessages(targetChatId, (prev) =>
             prev.map((m) =>
-              m.id === assistantId ? { ...m, relates, isStreaming: false } : m
-            )
+              m.id === assistantId ? { ...m, relates, isStreaming: false } : m,
+            ),
           );
           setIsLoading(false);
         },
         // onSuggestedImages — called once the stream finishes
         (suggestedImages) => {
           updateChatMessages(targetChatId, (prev) =>
-            prev.map((m) => (m.id === assistantId ? { ...m, suggestedImages } : m))
+            prev.map((m) => (m.id === assistantId ? { ...m, suggestedImages } : m)),
           );
         },
         // onError
@@ -399,8 +239,8 @@ function MainApp() {
                         : `Sorry, an error occurred (HTTP ${status}). Please try again.`,
                     isStreaming: false,
                   }
-                : m
-            )
+                : m,
+            ),
           );
           setIsLoading(false);
         },
@@ -414,8 +254,8 @@ function MainApp() {
           prev.map((m) =>
             m.id === assistantId
               ? { ...m, content: 'Sorry, something went wrong. Please try again.', isStreaming: false }
-              : m
-          )
+              : m,
+          ),
         );
         setIsLoading(false);
       }
@@ -545,7 +385,6 @@ function MainApp() {
 
   return (
     <div className="flex h-screen bg-amber-50 text-gray-900 overflow-hidden">
-      {/* Sidebar */}
       <Sidebar
         onNewChat={handleNewChat}
         chats={threads}
@@ -556,16 +395,13 @@ function MainApp() {
         setIsOpen={setIsSidebarOpen}
       />
 
-      {/* Main Chat Area */}
       <div
         className={`flex-1 flex flex-col relative transition-all duration-300 ${
           isSidebarOpen ? 'ml-64' : 'ml-0'
         }`}
       >
-        {/* Header */}
         <div className="border-b border-amber-200 bg-white/95 backdrop-blur-sm">
           <div className="w-full px-4 py-3 flex items-center justify-between">
-            {/* Left: Toggle + Logo */}
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -577,7 +413,6 @@ function MainApp() {
               <img src={logo} alt="ECEasy" className="h-12" />
             </div>
 
-            {/* Centre: App Name */}
             <div className="absolute left-1/2 transform -translate-x-1/2">
               <h1 className="text-2xl font-bold">
                 <span style={{ color: '#1e3a8a' }}>EC</span>
@@ -585,7 +420,6 @@ function MainApp() {
               </h1>
             </div>
 
-            {/* Right: balance spacer */}
             <div className="flex items-center gap-2">
               {llmConfigured && (
                 <span
@@ -609,7 +443,6 @@ function MainApp() {
           </div>
         </div>
 
-        {/* Messages Container */}
         <div className="flex-1 overflow-y-auto bg-amber-50">
           <div className="min-h-full flex flex-col">
             {messages.map((message) => (
@@ -625,7 +458,6 @@ function MainApp() {
               />
             ))}
 
-            {/* Initial loading indicator (before first token arrives) */}
             {isLoading && messages[messages.length - 1]?.content === '' && (
               <div className="flex gap-4 px-4 py-6 bg-amber-50">
                 <div className="max-w-4xl mx-auto w-full flex gap-4">
@@ -649,7 +481,6 @@ function MainApp() {
           </div>
         </div>
 
-        {/* Input Area */}
         <MessageInput
           onSendMessage={handleSendMessage}
           disabled={isLoading || showLlmModal}
@@ -658,202 +489,37 @@ function MainApp() {
         />
       </div>
 
-      {showLlmModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-amber-200">
-            <h2 className="text-xl font-bold text-gray-900">Choose your LLM access</h2>
-            <p className="mt-2 text-sm text-gray-600">
-              Use your own API key (recommended) or continue with ECEasy&apos;s shared key.
-            </p>
-
-            <div className="mt-5 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Provider</label>
-                <select
-                  value={selectedProvider}
-                  onChange={(e) => setSelectedProvider(e.target.value as UserLlmProvider)}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                >
-                  <option value="openai">OpenAI</option>
-                  <option value="deepseek">DeepSeek</option>
-                </select>
-              </div>
-
-              <div>
-                <div className="mb-1 flex items-center gap-2">
-                  <label className="block text-sm font-medium text-gray-700">Your API key</label>
-                  <button
-                    type="button"
-                    onClick={() => setShowApiKeyHint((prev) => !prev)}
-                    className="text-xs px-1.5 py-0.5 rounded border border-amber-300 text-amber-800 hover:bg-amber-50"
-                    aria-label="What is an API key?"
-                    title="What is an API key?"
-                  >
-                    ?
-                  </button>
-                </div>
-                <input
-                  type="password"
-                  value={userApiKey}
-                  onChange={(e) => setUserApiKey(e.target.value)}
-                  placeholder={selectedProvider === 'openai' ? 'sk-...' : 'sk-...'}
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
-                />
-                {showApiKeyHint && (
-                  <p className="mt-2 text-xs text-gray-600">
-                    An API key is a private token that lets apps use an AI provider on your account.
-                    You can get a free compatible key from{' '}
-                    <a
-                      href="https://github.com/chatanywhere/GPT_API_free"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 underline hover:text-blue-800"
-                    >
-                      chatanywhere/GPT_API_free
-                    </a>
-                    .
-                  </p>
-                )}
-                <p className="mt-1 text-xs text-gray-500">
-                  Key is sent only with chat requests and is not stored currently.
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Base URL (optional)</label>
-                <input
-                  type="url"
-                  value={userBaseUrlByProvider[selectedProvider]}
-                  onChange={(e) =>
-                    setUserBaseUrlByProvider((prev) => ({
-                      ...prev,
-                      [selectedProvider]: e.target.value,
-                    }))
-                  }
-                  placeholder={
-                    selectedProvider === 'openai'
-                      ? 'https://api.chatanywhere.org'
-                      : 'https://api.deepseek.com'
-                  }
-                  disabled={!isUserApiKeyStructurallyValid}
-                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 ${
-                    !isUserApiKeyStructurallyValid
-                      ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-                      : isUserBaseUrlStructurallyValid
-                        ? 'border-gray-300 bg-white text-gray-900'
-                        : 'border-red-300 bg-white text-gray-900'
-                  }`}
-                />
-                <p className={`mt-1 text-xs ${isUserBaseUrlStructurallyValid ? 'text-gray-500' : 'text-red-600'}`}>
-                  {!isUserApiKeyStructurallyValid
-                    ? 'Enter a valid API key first to unlock endpoint selection.'
-                    : 'Leave blank to use ECEasy defaults. Enter a valid http(s) endpoint if you want to override the provider URL.'}
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
-                <select
-                  value={isUserApiKeyStructurallyValid ? selectedModel : serverFixedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  disabled={!isUserApiKeyStructurallyValid}
-                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 ${
-                    isUserApiKeyStructurallyValid
-                      ? 'border-gray-300 bg-white text-gray-900'
-                      : 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
-                  }`}
-                >
-                  {isUserApiKeyStructurallyValid
-                    ? getModelsForProvider(selectedProvider).map((model) => (
-                        <option key={model} value={model}>
-                          {model}
-                        </option>
-                      ))
-                    : (
-                        <option value={serverFixedModel}>{serverFixedModel}</option>
-                      )}
-                </select>
-                <p className="mt-1 text-xs text-gray-500">
-                  {isUserApiKeyStructurallyValid
-                    ? 'This selected model is used only when you choose "Use my key".'
-                    : `Using fixed server model: ${serverFixedModel}. Enter a valid ${selectedProvider} API key (starts with sk-) to unlock model selection.`}
-                </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Memory window (turns)</label>
-                {isUserApiKeyStructurallyValid ? (
-                  <>
-                    <input
-                      type="range"
-                      min={0}
-                      max={MAX_USER_MEMORY_TURNS}
-                      step={1}
-                      value={userMemoryTurns}
-                      onChange={(e) => setUserMemoryTurns(Number(e.target.value))}
-                      className="w-full accent-amber-600"
-                    />
-                    <div className="mt-1 text-xs text-gray-600">
-                      {userMemoryTurns} turn{userMemoryTurns === 1 ? '' : 's'} (0 = stateless)
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <input
-                      type="range"
-                      min={SERVER_FIXED_MEMORY_TURNS}
-                      max={SERVER_FIXED_MEMORY_TURNS}
-                      value={SERVER_FIXED_MEMORY_TURNS}
-                      disabled
-                      className="w-full accent-gray-300 cursor-not-allowed"
-                    />
-                    <div className="mt-1 text-xs text-gray-500">
-                      Using fixed server memory: last {SERVER_FIXED_MEMORY_TURNS} turns. The shared key may trim history further to stay under its ~4096-token free limit. Enter a valid key to customize 0-{MAX_USER_MEMORY_TURNS}.
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-sm text-amber-900">
-                If you skip and use ECEasy&apos;s key, requests may incur our API costs and might be rate-limited (May not be available at all times).
-              </div>
-
-              {llmConfigError && <p className="text-sm text-red-600">{llmConfigError}</p>}
-            </div>
-
-            <div className="mt-6 flex flex-wrap gap-2 justify-end">
-              {llmConfigured && (
-                <button
-                  onClick={() => {
-                    setShowLlmModal(false);
-                    setLlmConfigError('');
-                  }}
-                  className="px-4 py-2 rounded-lg border border-gray-300 text-sm hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-              )}
-              <button
-                onClick={confirmUseServerKey}
-                className="px-4 py-2 rounded-lg border border-amber-300 text-sm text-amber-900 hover:bg-amber-50"
-              >
-                Skip - Use ECEasy key
-              </button>
-              <button
-                onClick={confirmUseOwnKey}
-                disabled={!isUserApiKeyStructurallyValid || !isUserBaseUrlStructurallyValid}
-                className={`px-4 py-2 rounded-lg text-white text-sm ${
-                  isUserApiKeyStructurallyValid && isUserBaseUrlStructurallyValid
-                    ? 'bg-amber-600 hover:bg-amber-700'
-                    : 'bg-amber-300 cursor-not-allowed'
-                }`}
-              >
-                Use my key
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <LlmSettingsModal
+        show={showLlmModal}
+        llmConfigured={llmConfigured}
+        selectedProvider={selectedProvider}
+        setSelectedProvider={setSelectedProvider}
+        userApiKey={userApiKey}
+        setUserApiKey={setUserApiKey}
+        showApiKeyHint={showApiKeyHint}
+        setShowApiKeyHint={setShowApiKeyHint}
+        userBaseUrl={userBaseUrlByProvider[selectedProvider]}
+        setUserBaseUrl={(value) =>
+          setUserBaseUrlByProvider((prev) => ({
+            ...prev,
+            [selectedProvider]: value,
+          }))
+        }
+        isUserApiKeyStructurallyValid={isUserApiKeyStructurallyValid}
+        isUserBaseUrlStructurallyValid={isUserBaseUrlStructurallyValid}
+        selectedModel={selectedModel}
+        setSelectedModel={setSelectedModel}
+        serverFixedModel={serverFixedModel}
+        userMemoryTurns={userMemoryTurns}
+        setUserMemoryTurns={setUserMemoryTurns}
+        llmConfigError={llmConfigError}
+        onConfirmUseServerKey={confirmUseServerKey}
+        onConfirmUseOwnKey={confirmUseOwnKey}
+        onClose={() => {
+          setShowLlmModal(false);
+          setLlmConfigError('');
+        }}
+      />
     </div>
   );
 }
