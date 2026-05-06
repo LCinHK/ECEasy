@@ -91,7 +91,7 @@ def stream_response(
             model=model_name,
             messages=chat_messages,
             max_tokens=1024,
-            stop=STOP_WORDS,
+            stop=STOP_WORDS if "grok" not in model_name.lower() else None,
             stream=True,
             temperature=0.7,
         )

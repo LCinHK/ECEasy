@@ -1,6 +1,7 @@
 import httpx
 import openai
 from fastapi import HTTPException
+import os
 
 from .config import (
     DEEPSEEK_API_KEY,
@@ -27,10 +28,30 @@ OPENAI_ALLOWED_MODELS = {
     "gpt-5-mini",
     "gpt-5-nano",
 }
+<<<<<<< Updated upstream
 DEEPSEEK_ALLOWED_MODELS = {"deepseek-r1", "deepseek-v3", "deepseek-v3-2-exp"}
 DEFAULT_USER_MODEL_BY_PROVIDER = {
     "openai": "gpt-5-mini",
     "deepseek": "deepseek-v3",
+=======
+DEEPSEEK_ALLOWED_MODELS = {"deepseek-chat","deepseek-reasoner"}
+
+GROK_ALLOWED_MODELS = {
+    "grok-4.3",
+    "grok-4-1-fast-reasoning",
+    "grok-4-fast-reasoning",
+    "grok-4-1-fast-non-reasoning",
+    "grok-4-fast-non-reasoning",
+    "grok-3",
+    "grok-3-mini",
+    "grok-beta"
+}
+
+DEFAULT_USER_MODEL_BY_PROVIDER = {
+    "openai": "gpt-5-mini",
+    "deepseek": "deepseek-chat",
+    "grok": "grok-4.3",
+>>>>>>> Stashed changes
 }
 
 
@@ -46,14 +67,16 @@ def _resolve_remote_model_name(provider: str, request: QueryRequest, using_serve
         raise HTTPException(status_code=400, detail="Unsupported OpenAI model selected.")
     if provider == "deepseek" and model_name not in DEEPSEEK_ALLOWED_MODELS:
         raise HTTPException(status_code=400, detail="Unsupported DeepSeek model selected.")
-
-    return model_name
+    if provider == "grok" and model_name not in GROK_ALLOWED_MODELS:
+        raise HTTPException(status_code=400, detail=f"Model not found: {model_name}")
 
 
 def resolve_runtime_llm_config(request: QueryRequest) -> tuple[openai.OpenAI, str, str, bool]:
     provider = (request.llm_provider or LLM_PROVIDER).lower()
-    if provider not in {"ollama", "openai", "deepseek"}:
-        raise HTTPException(status_code=400, detail="llm_provider must be one of: ollama, openai, deepseek")
+
+    # ← Updated to accept grok
+    if provider not in {"ollama", "openai", "deepseek", "grok"}:
+        raise HTTPException(status_code=400, detail="llm_provider must be one of: ollama, openai, deepseek, grok")
 
     if provider == "ollama":
         client = openai.OpenAI(
@@ -80,12 +103,28 @@ def resolve_runtime_llm_config(request: QueryRequest) -> tuple[openai.OpenAI, st
             detail="Provide api_key or set use_server_key=true for remote providers.",
         )
 
-    if provider == "openai":
+    # ← GROK SUPPORT ADDED HERE
+    if provider == "grok":
+        api_key = os.getenv("GROK_API_KEY") if using_server_key else user_api_key
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Grok API key is required for the selected mode.")
+        client = openai.OpenAI(
+            api_key=api_key,
+            base_url=os.getenv("GROK_BASE_URL", "https://api.x.ai/v1")
+        )
+
+    elif provider == "openai":
         api_key = OPENAI_API_KEY if using_server_key else user_api_key
         if not api_key:
             raise HTTPException(status_code=400, detail="OpenAI API key is required for the selected mode.")
+<<<<<<< Updated upstream
         client = openai.OpenAI(api_key=api_key, base_url=OPENAI_BASE_URL)
     else:
+=======
+        client = openai.OpenAI(api_key=api_key, base_url=_resolve_provider_base_url(provider, request, using_server_key))
+
+    else:  # deepseek
+>>>>>>> Stashed changes
         api_key = DEEPSEEK_API_KEY if using_server_key else user_api_key
         if not api_key:
             raise HTTPException(status_code=400, detail="DeepSeek API key is required for the selected mode.")
