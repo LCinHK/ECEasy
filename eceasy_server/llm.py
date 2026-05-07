@@ -1,6 +1,6 @@
 import httpx
 import openai
-import os
+
 from fastapi import HTTPException
 
 from .config import (
