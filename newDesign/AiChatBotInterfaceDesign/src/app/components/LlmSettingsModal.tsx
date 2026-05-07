@@ -72,6 +72,7 @@ export function LlmSettingsModal({
             >
               <option value="openai">OpenAI</option>
               <option value="deepseek">DeepSeek</option>
+              <option value="grok">Grok (xAI)</option>
             </select>
           </div>
 

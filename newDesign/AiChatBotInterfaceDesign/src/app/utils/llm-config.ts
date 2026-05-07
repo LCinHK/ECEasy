@@ -1,4 +1,4 @@
-export type UserLlmProvider = 'openai' | 'deepseek';
+export type UserLlmProvider = 'openai' | 'deepseek' | 'grok';
 
 export const OPENAI_MODELS = [
   'gpt-5.2',
@@ -16,9 +16,12 @@ export const OPENAI_MODELS = [
 
 export const DEEPSEEK_MODELS = ['deepseek-chat', 'deepseek-reasoner'] as const;
 
+export const GROK_MODELS = ['grok-4.3', 'grok-beta'] as const;   // ← added
+
 export const SERVER_MODEL_BY_PROVIDER: Record<UserLlmProvider, string> = {
   openai: 'gpt-5-mini',
   deepseek: 'deepseek-chat',
+  grok: 'grok-4.3',          // ← added
 };
 
 export const SERVER_FIXED_MEMORY_TURNS = 3;
@@ -27,15 +30,21 @@ export const MAX_USER_MEMORY_TURNS = 15;
 export const API_KEY_PATTERN_BY_PROVIDER: Record<UserLlmProvider, RegExp> = {
   openai: /^sk-[A-Za-z0-9_-]{16,}$/,
   deepseek: /^sk-[A-Za-z0-9_-]{16,}$/,
+  grok: /^sk-[A-Za-z0-9_-]{16,}$/,     // ← added
 };
 
 export const DEFAULT_BASE_URL_BY_PROVIDER: Record<UserLlmProvider, string> = {
   openai: '',
   deepseek: '',
+  grok: 'https://api.x.ai/v1',        // ← added
 };
 
 export const getModelsForProvider = (provider: UserLlmProvider): readonly string[] =>
-  provider === 'openai' ? OPENAI_MODELS : DEEPSEEK_MODELS;
+  provider === 'openai'
+    ? OPENAI_MODELS
+    : provider === 'deepseek'
+    ? DEEPSEEK_MODELS
+    : GROK_MODELS;                     // ← added
 
 export const isStructurallyValidApiKey = (provider: UserLlmProvider, rawKey: string): boolean => {
   const key = rawKey.trim();

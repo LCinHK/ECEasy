@@ -48,6 +48,11 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", os.environ.get("LLM_REMOTE
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL", os.environ.get("LLM_REMOTE_URL", "https://api.deepseek.com"))
 DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", os.environ.get("LLM_REMOTE_MODEL", "deepseek-chat"))
 
+# === GROK CONFIG ===
+GROK_API_KEY = os.environ.get("GROK_API_KEY", "")
+GROK_MODEL = os.environ.get("GROK_MODEL", "grok-4.3")
+GROK_BASE_URL = os.environ.get("GROK_BASE_URL", "https://api.x.ai/v1")
+
 STOP_WORDS = [
     "<|im_end|>",
     "[End]",
@@ -110,6 +115,8 @@ def get_model_name_for_provider(provider: str) -> str:
         return OPENAI_MODEL
     if provider == "deepseek":
         return DEEPSEEK_MODEL
+    if provider == "grok":
+        return GROK_MODEL
     return OLLAMA_MODEL
 
 

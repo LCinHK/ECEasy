@@ -1,5 +1,6 @@
 import httpx
 import openai
+import os
 from fastapi import HTTPException
 
 from .config import (
@@ -11,6 +12,9 @@ from .config import (
     OPENAI_API_KEY,
     OPENAI_BASE_URL,
     get_model_name_for_provider,
+    GROK_API_KEY,
+    GROK_BASE_URL,
+    GROK_MODEL,
 )
 from .schemas import QueryRequest
 
@@ -27,22 +31,47 @@ OPENAI_ALLOWED_MODELS = {
     "gpt-5-mini",
     "gpt-5-nano",
 }
-DEEPSEEK_ALLOWED_MODELS = {"deepseek-chat","deepseek-reasoner"}
+DEEPSEEK_ALLOWED_MODELS = {"deepseek-chat", "deepseek-reasoner"}
+
+GROK_ALLOWED_MODELS = {
+    "grok-4.3",
+    "grok-4-1-fast-reasoning",
+    "grok-4-fast-reasoning",
+    "grok-4-1-fast-non-reasoning",
+    "grok-4-fast-non-reasoning",
+    "grok-3",
+    "grok-3-mini",
+    "grok-beta",
+}
+
 DEFAULT_USER_MODEL_BY_PROVIDER = {
     "openai": "gpt-5-mini",
     "deepseek": "deepseek-chat",
+    "grok": "grok-4.3",
 }
 
 
 def _resolve_provider_base_url(provider: str, request: QueryRequest, using_server_key: bool) -> str:
     if using_server_key:
-        return OPENAI_BASE_URL if provider == "openai" else DEEPSEEK_BASE_URL
+        if provider == "openai":
+            return OPENAI_BASE_URL
+        if provider == "deepseek":
+            return DEEPSEEK_BASE_URL
+        if provider == "grok":
+            return GROK_BASE_URL
 
     requested_base_url = request.base_url
     if requested_base_url is not None:
         return str(requested_base_url).rstrip("/")
 
-    return OPENAI_BASE_URL if provider == "openai" else DEEPSEEK_BASE_URL
+    if provider == "openai":
+        return OPENAI_BASE_URL
+    if provider == "deepseek":
+        return DEEPSEEK_BASE_URL
+    if provider == "grok":
+        return GROK_BASE_URL
+
+    return OPENAI_BASE_URL
 
 
 def _resolve_remote_model_name(provider: str, request: QueryRequest, using_server_key: bool) -> str:
@@ -57,14 +86,16 @@ def _resolve_remote_model_name(provider: str, request: QueryRequest, using_serve
         raise HTTPException(status_code=400, detail="Unsupported OpenAI model selected.")
     if provider == "deepseek" and model_name not in DEEPSEEK_ALLOWED_MODELS:
         raise HTTPException(status_code=400, detail="Unsupported DeepSeek model selected.")
+    if provider == "grok" and model_name not in GROK_ALLOWED_MODELS:
+        raise HTTPException(status_code=400, detail=f"Model not found: {model_name}")
 
     return model_name
 
 
 def resolve_runtime_llm_config(request: QueryRequest) -> tuple[openai.OpenAI, str, str, bool]:
     provider = (request.llm_provider or LLM_PROVIDER).lower()
-    if provider not in {"ollama", "openai", "deepseek"}:
-        raise HTTPException(status_code=400, detail="llm_provider must be one of: ollama, openai, deepseek")
+    if provider not in {"ollama", "openai", "deepseek", "grok"}:
+        raise HTTPException(status_code=400, detail="llm_provider must be one of: ollama, openai, deepseek, grok")
 
     if provider == "ollama":
         client = openai.OpenAI(
@@ -90,12 +121,19 @@ def resolve_runtime_llm_config(request: QueryRequest) -> tuple[openai.OpenAI, st
             status_code=400,
             detail="Provide api_key or set use_server_key=true for remote providers.",
         )
+    # Provider-specific client setup (Grok added)
+    if provider == "grok":
+        api_key = GROK_API_KEY if using_server_key else user_api_key
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Grok API key is required for the selected mode.")
+        client = openai.OpenAI(api_key=api_key, base_url=_resolve_provider_base_url(provider, request, using_server_key))
 
-    if provider == "openai":
+    elif provider == "openai":
         api_key = OPENAI_API_KEY if using_server_key else user_api_key
         if not api_key:
             raise HTTPException(status_code=400, detail="OpenAI API key is required for the selected mode.")
         client = openai.OpenAI(api_key=api_key, base_url=_resolve_provider_base_url(provider, request, using_server_key))
+
     else:
         api_key = DEEPSEEK_API_KEY if using_server_key else user_api_key
         if not api_key:
