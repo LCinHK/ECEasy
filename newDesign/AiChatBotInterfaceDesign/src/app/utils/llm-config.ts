@@ -30,7 +30,7 @@ export const MAX_USER_MEMORY_TURNS = 15;
 export const API_KEY_PATTERN_BY_PROVIDER: Record<UserLlmProvider, RegExp> = {
   openai: /^sk-[A-Za-z0-9_-]{16,}$/,
   deepseek: /^sk-[A-Za-z0-9_-]{16,}$/,
-  grok: /^sk-[A-Za-z0-9_-]{16,}$/,     // ← added
+  grok: /^xai-[A-Za-z0-9_-]{8,}$/,     // Grok keys start with "xai-"
 };
 
 export const DEFAULT_BASE_URL_BY_PROVIDER: Record<UserLlmProvider, string> = {

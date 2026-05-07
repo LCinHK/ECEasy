@@ -93,7 +93,7 @@ export function LlmSettingsModal({
               type="password"
               value={userApiKey}
               onChange={(e) => setUserApiKey(e.target.value)}
-              placeholder={selectedProvider === 'openai' ? 'sk-...' : 'sk-...'}
+              placeholder={selectedProvider === 'grok' ? 'xai-...' : 'sk-...'}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
             />
             {showApiKeyHint && (
@@ -164,7 +164,7 @@ export function LlmSettingsModal({
             <p className="mt-1 text-xs text-gray-500">
               {isUserApiKeyStructurallyValid
                 ? 'This selected model is used only when you choose "Use my key".'
-                : `Using fixed server model: ${serverFixedModel}. Enter a valid ${selectedProvider} API key (starts with sk-) to unlock model selection.`}
+                : `Using fixed server model: ${serverFixedModel}. Enter a valid ${selectedProvider} API key (starts with ${selectedProvider === 'grok' ? 'xai-' : 'sk-'}) to unlock model selection.`}
             </p>
           </div>
 

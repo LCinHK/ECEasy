@@ -20,7 +20,9 @@ SERVER_PROMPT_TOKEN_BUDGET = 3200
 def _sanitize_error_text(text: str) -> str:
     if not text:
         return ""
+    # Mask common API key patterns (OpenAI 'sk-' and Grok 'xai-') to avoid leaking secrets in logs
     sanitized = re.sub(r"sk-[A-Za-z0-9\-_]+", "sk-***", text)
+    sanitized = re.sub(r"xai-[A-Za-z0-9\-_]+", "xai-***", sanitized)
     sanitized = re.sub(r"(ApiKey\s*[:：]\s*)([^\s)\]，,]+)", r"\1***", sanitized, flags=re.IGNORECASE)
     return sanitized.strip()
 
