@@ -67,6 +67,14 @@ def _infer_source_relpath(file_path: str, metadata: dict) -> str:
     return os.path.basename(normalized)
 
 
+def _safe_filename_from_path(file_path: str) -> str:
+    """Return filename only, handling both Unix and Windows separators."""
+    normalized = re.sub(r"\\+", "/", str(file_path or "")).strip()
+    if not normalized:
+        return "Source"
+    return normalized.split("/")[-1] or "Source"
+
+
 def _collect_official_course_codes() -> set[str]:
     """Collect course codes from concrete course file names for validation/reranking."""
     base = Path(__file__).resolve().parent / "ECEknowledge" / "course_syllabus"
@@ -149,12 +157,22 @@ def _lookup_official_course_fact(course_code: str) -> dict | None:
                 break
 
         if title:
+            rel_under_knowledge = ""
+            try:
+                rel_under_knowledge = str(path.relative_to(Path(__file__).resolve().parent / "ECEknowledge")).replace("\\", "/")
+            except Exception:
+                rel_under_knowledge = _infer_source_relpath(str(path), {})
+
+            encoded_relpath = quote(rel_under_knowledge, safe="/") if rel_under_knowledge else ""
+            resource_url = f"/resource/ECEknowledge/{encoded_relpath}" if encoded_relpath else "#"
+            direct_url = f"/ECEknowledge/{encoded_relpath}" if encoded_relpath else "#"
+
             return {
                 "name": f"[{code}] official syllabus fact",
                 "snippet": f"Official course title: {title}",
-                "url": "#",
-                "direct_url": "#",
-                "source_relpath": str(path.relative_to(Path(__file__).resolve().parent)).replace("\\", "/"),
+                "url": resource_url,
+                "direct_url": direct_url,
+                "source_relpath": rel_under_knowledge,
             }
 
     return None
@@ -287,7 +305,7 @@ def get_rag_context(query: str, k: int | None = None):
         doc_course_code = _normalize_course_code(str(metadata.get("course_code", "")))
         doc_department = str(metadata.get("department", "")).upper()
         doc_type = str(metadata.get("doc_type", "")).lower()
-        source_name = str(metadata.get("source_name", "") or os.path.basename(file_path)).lower()
+        source_name = str(metadata.get("source_name", "") or _safe_filename_from_path(file_path)).lower()
         source_quality = str(metadata.get("source_quality", "")).lower()
         course_conf = str(metadata.get("course_code_confidence", "")).lower()
         is_aggregated = bool(metadata.get("is_aggregated_syllabus")) or "aggregate" in source_quality
@@ -400,7 +418,7 @@ def get_rag_context(query: str, k: int | None = None):
         encoded_relpath = quote(source_relpath, safe="/") if source_relpath else ""
         original_url = str(metadata.get("original_url", "")).strip()
         source_quality = str(metadata.get("source_quality", "")).lower()
-        source_name = str(metadata.get("source_name", "") or os.path.basename(file_path)).lower()
+        source_name = str(metadata.get("source_name", "") or _safe_filename_from_path(file_path)).lower()
         is_aggregated = bool(metadata.get("is_aggregated_syllabus")) or "aggregate" in source_quality
         if not is_aggregated and source_name.endswith(".docx") and "syllabus" in source_name:
             is_aggregated = True
@@ -408,10 +426,10 @@ def get_rag_context(query: str, k: int | None = None):
         if "page" in metadata:
             # page is 0-indexed in LangChain loaders
             page_num = int(metadata["page"]) + 1
-            name = f"Page {page_num}, {os.path.basename(file_path)}"
+            name = f"Page {page_num}, {_safe_filename_from_path(file_path)}"
             url_suffix = f"#page={page_num}"
         else:
-            name = os.path.basename(file_path) if file_path else "Source"
+            name = _safe_filename_from_path(file_path)
             url_suffix = ""
 
         course_code = _normalize_course_code(str(metadata.get("course_code", "")))

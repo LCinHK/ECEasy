@@ -27,9 +27,11 @@ torch==2.10.0
 # --- Optional: legacy Chroma mode (KNOWLEDGE=chroma) ---
 # langchain-chroma==0.2.0
 
+# --- Runtime document compatibility ---
+docx2txt==0.9
+
 # --- Not included on purpose (ingestion/build-only) ---
 # pypdf==6.7.5
-# docx2txt==0.9
 # beautifulsoup4==4.14.3
 # langchain-text-splitters==0.3.8
 # pillow==11.3.0

@@ -265,6 +265,47 @@ See `.env.example` for full reference.
 | 🔧 | LLM Integration | Supports Ollama (local), OpenAI, DeepSeek (runtime switching) |
 | 📝 | Prompt Quality | System prompts tuned for ECE student context |
 
+### TODOs (Post-Current Stage -> Complete Service)
+
+#### Phase 1 - Foundation Hardening (near term)
+- [ ] Add clear `dev` / `staging` / `prod` environment separation and deployment configs.
+- [ ] Introduce DB layer setup (SQLAlchemy + Alembic) for future schema migrations.
+- [ ] Standardize API error responses (user-safe message + internal error code/log context).
+- [ ] Replace temporary file/KV coupling in request flow with service-layer abstractions.
+
+#### Phase 2 - User & Data Model (core product)
+- [ ] Implement user account system (signup, login, logout, password reset).
+- [ ] Add auth session strategy (JWT + refresh token or secure cookie session).
+- [ ] Add per-user authorization checks for chat history and thread operations.
+- [ ] Create MySQL tables for `users`, `chat_threads`, `chat_messages`, and auth/session data.
+- [ ] Migrate from single shelve `.kv` runtime cache to user-scoped persistent chat storage.
+
+#### Phase 3 - Security & Privacy Baseline
+- [ ] Enforce secure secret handling (no hardcoded keys, strict `.env`/server secret management).
+- [ ] Add rate limiting and abuse prevention (per IP + per user quotas).
+- [ ] Apply stricter CORS/CSRF/session security settings for public deployment.
+- [ ] Encrypt or avoid storing user-provided API keys; define retention and deletion policy.
+- [ ] Add audit logs for auth events and sensitive operations.
+
+#### Phase 4 - Reliability, Ops, and Scalability
+- [ ] Add Redis (or equivalent) for rate-limit state, short-lived cache, and background job coordination.
+- [ ] Move long-running tasks (ingestion/reindexing/report jobs) to background workers.
+- [ ] Add health checks, metrics, and alerting (latency, errors, provider failures, DB health).
+- [ ] Set up backup/restore procedures for Azure MySQL and verify with recovery drills.
+- [ ] Define release process with staging validation, rollback plan, and smoke tests.
+
+#### Phase 5 - Productization & Governance
+- [ ] Build admin capabilities (user management, usage monitoring, model/provider controls).
+- [ ] Add usage/cost tracking dashboards (requests, tokens, provider consumption).
+- [ ] Add automated test layers (unit, integration, end-to-end parser/streaming regressions).
+- [ ] Publish privacy/terms and data lifecycle docs for classmates using the service.
+- [ ] Plan optional future enhancements (SSO, role-based features, analytics refinement).
+
+#### Suggested Execution Order
+- [ ] Start with DB migration + auth basics first (minimum multi-user foundation).
+- [ ] Then switch chat persistence from shelve to MySQL.
+- [ ] Then complete security hardening and operational monitoring before wider rollout.
+
 ---
 
 ## How to Run
