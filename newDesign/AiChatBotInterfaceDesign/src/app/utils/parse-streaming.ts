@@ -49,7 +49,7 @@ export interface ConversationHistoryTurn {
 }
 
 export interface LlmRuntimeConfig {
-  llmProvider?: 'openai' | 'deepseek';
+  llmProvider?: 'openai' | 'deepseek' | 'grok';
   apiKey?: string;
   useServerKey?: boolean;
   llmModel?: string;

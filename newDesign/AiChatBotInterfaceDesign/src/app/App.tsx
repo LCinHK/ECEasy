@@ -413,7 +413,7 @@ function MainApp() {
               <img src={logo} alt="ECEasy" className="h-12" />
             </div>
 
-            <div className="absolute left-1/2 transform -translate-x-1/2">
+            <div className="flex items-center">
               <h1 className="text-2xl font-bold">
                 <span style={{ color: '#1e3a8a' }}>EC</span>
                 <span style={{ color: '#3b82f6' }}>Easy</span>
